@@ -349,7 +349,6 @@ export default function App() {
                   <th style={{ minWidth: '75px' }} title="Ukuran berkas asli">Size Ori</th>
                   <th style={{ minWidth: '85px' }} title="Ukuran setelah downscale">Size Akhir</th>
                   <th style={{ minWidth: '95px' }} title="Persentase penurunan & rasio hemat">Hemat</th>
-                  <th style={{ minWidth: '105px' }} title="Resolusi pixel akhir (lebar × tinggi)">Resolusi</th>
                 </tr>
               </thead>
               <tbody>
@@ -382,15 +381,6 @@ export default function App() {
                           </span>
                           {ratio && <span className="reduction-ratio">{ratio}x</span>}
                         </div>
-                      </td>
-                      <td className="cell-dimensions">
-                        {item.finalWidth > 0 ? (
-                          <span className="dimensions-pill">
-                            {item.finalWidth} × {item.finalHeight} px
-                          </span>
-                        ) : (
-                          <span className="dimensions-empty">-</span>
-                        )}
                       </td>
                     </tr>
                   );
@@ -612,13 +602,19 @@ export default function App() {
                   <div className="field-group">
                     <label className="field-label">Format</label>
                     <div className="format-pills">
-                      {['png', 'jpeg', 'webp', 'avif'].map((fmt) => (
+                      {[
+                        { id: 'png', label: 'PNG' },
+                        { id: 'jpeg', label: 'JPEG' },
+                        { id: 'webp', label: 'WebP' },
+                        { id: 'avif', label: 'AVIF' },
+                      ].map((item) => (
                         <button
-                          key={fmt}
-                          className={`format-btn ${format === fmt ? 'active' : ''}`}
-                          onClick={() => setFormat(fmt)}
+                          key={item.id}
+                          type="button"
+                          className={`format-btn ${format === item.id ? 'active' : ''}`}
+                          onClick={() => setFormat(item.id)}
                         >
-                          {fmt.toUpperCase()}
+                          {item.label}
                         </button>
                       ))}
                     </div>
@@ -663,9 +659,10 @@ export default function App() {
                       <span style={{ fontSize: 12.5, fontWeight: 600 }}>KB</span>
                     </div>
                     <div className="presets-row">
-                      {['50', '100', '180', '300'].map((preset) => (
+                      {['50', '150', '180', '300'].map((preset) => (
                         <button
                           key={preset}
+                          type="button"
                           className={`preset-btn ${maxKb === preset ? 'active' : ''}`}
                           onClick={() => setMaxKb(preset)}
                         >

@@ -8,7 +8,7 @@
   --accent-blue: #0064f4;
   --accent-blue-hover: #0055db;
   --accent-cyan: #21d4f4;
-  --sidebar-width: 260px;
+  --sidebar-width: 250px;
 }
 
 * {
@@ -40,8 +40,8 @@ html, body, #root {
    ========================================= */
 .sidebar {
   width: var(--sidebar-width);
-  min-width: 240px;
-  max-width: 290px;
+  min-width: var(--sidebar-width);
+  max-width: var(--sidebar-width);
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -179,9 +179,16 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 24px 28px;
-  overflow: hidden;
-  gap: 18px;
+  padding: 24px 22px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  gap: 16px;
+  background-color: #f3f9fe;
+  background-image: url('/assets/content-bg.png');
+  background-repeat: no-repeat;
+  background-position: right top;
+  background-size: auto; /* Menggunakan ukuran piksel native 1:1 tanpa di-stretch/blur */
+  image-rendering: -webkit-optimize-contrast;
 }
 
 /* Header */
@@ -189,6 +196,8 @@ html, body, #root {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
+  max-width: 934px;
 }
 
 .header-meta {
@@ -225,8 +234,10 @@ html, body, #root {
 .content-body {
   flex: 1;
   display: flex;
-  gap: 16px;
+  gap: 14px;
   min-height: 0;
+  width: 100%;
+  max-width: 934px;
 }
 
 .body-left {
@@ -395,55 +406,81 @@ html, body, #root {
 
 .format-pills {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
 }
 
 .format-btn {
-  flex: 1;
-  padding: 6px 0;
-  background: #f1f6fd;
+  flex: none;
+  height: 28px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: #ffffff;
   border: 1px solid #d0e0f5;
-  border-radius: 7px;
-  font-size: 12px;
+  border-radius: 9999px;
+  font-size: 11.5px;
   font-weight: 700;
   color: #3b507d;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .format-btn:hover {
-  background: #e4eefa;
+  background: #f0f7ff;
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
 }
 
 .format-btn.active {
   background: var(--accent-blue);
   color: #ffffff;
   border-color: var(--accent-blue);
-  box-shadow: 0 3px 8px rgba(0, 100, 244, 0.28);
+  box-shadow: 0 2px 8px rgba(0, 100, 244, 0.28);
 }
 
 .presets-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
+  margin-top: 4px;
 }
 
 .preset-btn {
-  flex: 1;
-  padding: 5px 0;
-  background: #f7faff;
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: #ffffff;
   border: 1px solid #d5e5f8;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 700;
   color: #194685;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
-.preset-btn:hover, .preset-btn.active {
-  background: #e2effd;
-  border-color: #0064f4;
-  color: #0064f4;
+.preset-btn:hover {
+  background: #f0f7ff;
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.preset-btn.active {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  color: #ffffff;
+  box-shadow: 0 2px 7px rgba(0, 100, 244, 0.25);
 }
 
 .input-text {
@@ -884,8 +921,10 @@ html, body, #root {
 .content-footer {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   padding-top: 4px;
+  width: 100%;
+  max-width: 934px;
 }
 
 .progress-track {
