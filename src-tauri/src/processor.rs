@@ -59,6 +59,7 @@ impl OutputFormat {
             Self::Avif => "avif",
         }
     }
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             Self::Png => "PNG",
