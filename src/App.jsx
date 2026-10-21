@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -12,14 +12,20 @@ import {
   SolarPlayIcon,
   SolarTrashIcon,
   SolarHistoryIcon,
+  SolarAddFolderIcon,
 } from './Icons';
 import StripeProgress from './StripeProgress';
 import './App.css';
 
 export default function App() {
   const [page, setPage] = useState('file'); // 'file' | 'single' | 'multiple' | 'copy'
+
+  // Independent inputs per tab menu
   const [files, setFiles] = useState([]);
-  const [inputFolder, setInputFolder] = useState('');
+  const [singleFolder, setSingleFolder] = useState('');
+  const [multipleFolder, setMultipleFolder] = useState('');
+
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [outputFolder, setOutputFolder] = useState('');
   const [customOutput, setCustomOutput] = useState(false);
   const [format, setFormat] = useState('jpeg');
@@ -29,12 +35,48 @@ export default function App() {
   const [folderNames, setFolderNames] = useState('');
   const [copySource, setCopySource] = useState('');
   const [copyDestination, setCopyDestination] = useState('');
-  const [logs, setLogs] = useState([]);
-  const [processedItems, setProcessedItems] = useState([]);
-  const [outputDir, setOutputDir] = useState('');
+
+  // Independent logs, results, output directories, and progress per tab menu
+  const [tabLogs, setTabLogs] = useState({
+    file: [],
+    single: [],
+    multiple: [],
+    copy: [],
+  });
+  const [tabProcessedItems, setTabProcessedItems] = useState({
+    file: [],
+    single: [],
+    multiple: [],
+    copy: [],
+  });
+  const [tabOutputDir, setTabOutputDir] = useState({
+    file: '',
+    single: '',
+    multiple: '',
+    copy: '',
+  });
+  const [tabProgress, setTabProgress] = useState({
+    file: 0,
+    single: 0,
+    multiple: 0,
+    copy: 0,
+  });
+
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [progress, setProgress] = useState(0);
+
+  // References for active and background tasks
+  const pageRef = useRef(page);
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
+  const processingTabRef = useRef('file');
+
+  // Active tab derived state
+  const logs = tabLogs[page] || [];
+  const processedItems = tabProcessedItems[page] || [];
+  const outputDir = tabOutputDir[page] || '';
+  const progress = tabProgress[page] || 0;
 
   // Listen for real-time progress updates from backend
   useEffect(() => {
@@ -47,17 +89,21 @@ export default function App() {
           if (!active) return;
           if (event && event.payload) {
             const { percentage, line, item, outputDir: outDir } = event.payload;
+            const target = processingTabRef.current || pageRef.current || 'file';
             if (typeof percentage === 'number') {
-              setProgress(percentage);
+              setTabProgress((prev) => ({ ...prev, [target]: percentage }));
             }
             if (line) {
-              addLog(line);
+              addLog(line, target);
             }
             if (item) {
-              setProcessedItems((prev) => [...prev, item]);
+              setTabProcessedItems((prev) => ({
+                ...prev,
+                [target]: [...(prev[target] || []), item],
+              }));
             }
             if (outDir) {
-              setOutputDir(outDir);
+              setTabOutputDir((prev) => ({ ...prev, [target]: outDir }));
             }
           }
         });
@@ -74,22 +120,31 @@ export default function App() {
     };
   }, []);
 
-  const addLog = (text) => {
-    setLogs((prev) => [...prev, text]);
+  const addLog = (text, targetPage = pageRef.current) => {
+    setTabLogs((prev) => ({
+      ...prev,
+      [targetPage]: [...(prev[targetPage] || []), text],
+    }));
   };
 
   const handleClearLogs = () => {
-    setLogs([]);
-    setProcessedItems([]);
-    setOutputDir('');
+    setTabLogs((prev) => ({ ...prev, [page]: [] }));
+    setTabProcessedItems((prev) => ({ ...prev, [page]: [] }));
+    setTabOutputDir((prev) => ({ ...prev, [page]: '' }));
+    setTabProgress((prev) => ({ ...prev, [page]: 0 }));
   };
 
   // Drag & drop support via Tauri WebView event
   useEffect(() => {
     let unlisten;
     try {
-      getCurrentWebview().onDragDropEvent((event) => {
-        if (event.payload.type === 'drop') {
+      getCurrentWebview().onDragDropEvent(async (event) => {
+        if (event.payload.type === 'enter' || event.payload.type === 'over') {
+          setIsDraggingOver(true);
+        } else if (event.payload.type === 'leave') {
+          setIsDraggingOver(false);
+        } else if (event.payload.type === 'drop') {
+          setIsDraggingOver(false);
           const dropped = event.payload.paths || [];
           if (dropped.length > 0) {
             if (page === 'file') {
@@ -100,13 +155,61 @@ export default function App() {
               });
               if (filtered.length > 0) {
                 setFiles(filtered);
-                setProgress(0);
-                addLog(`Dropped ${filtered.length} new image(s)`);
+                setTabProgress((prev) => ({ ...prev, file: 0 }));
+                addLog(`Dropped ${filtered.length} new image(s)`, 'file');
               }
-            } else if (page !== 'copy') {
-              setInputFolder(dropped[0]);
-              setProgress(0);
-              addLog(`Source folder selected: ${dropped[0]}`);
+            } else if (page === 'single') {
+              let targetPath = dropped[0];
+              try {
+                const resolved = await invoke('resolve_folder_path', { path: targetPath });
+                if (resolved) targetPath = resolved;
+              } catch {
+                const imgExts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'heic', 'heif'];
+                const seg = targetPath.split(/[\\/]/).pop() || '';
+                const ext = seg.includes('.') ? seg.split('.').pop()?.toLowerCase() : null;
+                if (ext && imgExts.includes(ext)) {
+                  const parent = targetPath.substring(0, Math.max(targetPath.lastIndexOf('\\'), targetPath.lastIndexOf('/')));
+                  if (parent) targetPath = parent;
+                }
+              }
+              setSingleFolder(targetPath);
+              setTabProgress((prev) => ({ ...prev, single: 0 }));
+              addLog(`Single folder selected: ${targetPath}`, 'single');
+            } else if (page === 'multiple') {
+              let targetPath = dropped[0];
+              try {
+                const resolved = await invoke('resolve_folder_path', { path: targetPath });
+                if (resolved) targetPath = resolved;
+              } catch {
+                const imgExts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'heic', 'heif'];
+                const seg = targetPath.split(/[\\/]/).pop() || '';
+                const ext = seg.includes('.') ? seg.split('.').pop()?.toLowerCase() : null;
+                if (ext && imgExts.includes(ext)) {
+                  const parent = targetPath.substring(0, Math.max(targetPath.lastIndexOf('\\'), targetPath.lastIndexOf('/')));
+                  if (parent) targetPath = parent;
+                }
+              }
+              setMultipleFolder(targetPath);
+              setTabProgress((prev) => ({ ...prev, multiple: 0 }));
+              addLog(`Multiple folder root selected: ${targetPath}`, 'multiple');
+            } else if (page === 'copy') {
+              let targetPath = dropped[0];
+              try {
+                const resolved = await invoke('resolve_folder_path', { path: targetPath });
+                if (resolved) targetPath = resolved;
+              } catch {
+                // fallback
+              }
+              if (!copySource) {
+                setCopySource(targetPath);
+                addLog(`Source folder selected: ${targetPath}`, 'copy');
+              } else if (!copyDestination) {
+                setCopyDestination(targetPath);
+                addLog(`Destination folder selected: ${targetPath}`, 'copy');
+              } else {
+                setCopySource(targetPath);
+                addLog(`Source folder updated: ${targetPath}`, 'copy');
+              }
             }
           }
         }
@@ -128,23 +231,37 @@ export default function App() {
       const selected = await invoke('pick_files');
       if (selected && selected.length > 0) {
         setFiles(selected);
-        setProgress(0);
-        addLog(`Selected ${selected.length} image(s)`);
+        setTabProgress((prev) => ({ ...prev, file: 0 }));
+        addLog(`Selected ${selected.length} image(s)`, 'file');
       }
     } catch (err) {
-      addLog(`File pick error: ${err}`);
+      addLog(`File pick error: ${err}`, 'file');
     }
   };
 
-  const handlePickInputFolder = async () => {
+  const handlePickSingleFolder = async () => {
     try {
       const folder = await invoke('pick_folder');
       if (folder) {
-        setInputFolder(folder);
-        addLog(`Source folder set: ${folder}`);
+        setSingleFolder(folder);
+        setTabProgress((prev) => ({ ...prev, single: 0 }));
+        addLog(`Single folder set: ${folder}`, 'single');
       }
     } catch (err) {
-      addLog(`Folder pick error: ${err}`);
+      addLog(`Folder pick error: ${err}`, 'single');
+    }
+  };
+
+  const handlePickMultipleFolder = async () => {
+    try {
+      const folder = await invoke('pick_folder');
+      if (folder) {
+        setMultipleFolder(folder);
+        setTabProgress((prev) => ({ ...prev, multiple: 0 }));
+        addLog(`Multiple folder root set: ${folder}`, 'multiple');
+      }
+    } catch (err) {
+      addLog(`Folder pick error: ${err}`, 'multiple');
     }
   };
 
@@ -153,10 +270,10 @@ export default function App() {
       const folder = await invoke('pick_folder');
       if (folder) {
         setOutputFolder(folder);
-        addLog(`Output folder set: ${folder}`);
+        addLog(`Output folder set: ${folder}`, page);
       }
     } catch (err) {
-      addLog(`Folder pick error: ${err}`);
+      addLog(`Folder pick error: ${err}`, page);
     }
   };
 
@@ -165,7 +282,7 @@ export default function App() {
       const folder = await invoke('pick_folder');
       if (folder) setCopySource(folder);
     } catch (err) {
-      addLog(`Source pick error: ${err}`);
+      addLog(`Source pick error: ${err}`, 'copy');
     }
   };
 
@@ -174,17 +291,18 @@ export default function App() {
       const folder = await invoke('pick_folder');
       if (folder) setCopyDestination(folder);
     } catch (err) {
-      addLog(`Destination pick error: ${err}`);
+      addLog(`Destination pick error: ${err}`, 'copy');
     }
   };
 
   // Execution
   const handleStart = async () => {
     if (busy) return;
+    processingTabRef.current = page;
 
     if (page === 'copy') {
       if (!copySource || !copyDestination) {
-        addLog('Error: Choose source and destination folders.');
+        addLog('Error: Choose source and destination folders.', 'copy');
         return;
       }
       const names = folderNames
@@ -193,22 +311,25 @@ export default function App() {
         .filter(Boolean);
 
       if (names.length === 0) {
-        addLog('Error: Enter folder names, one per line.');
+        addLog('Error: Enter folder names, one per line.', 'copy');
         return;
       }
 
       setBusy(true);
-      setProgress(0);
+      setTabProgress((prev) => ({ ...prev, copy: 0 }));
       try {
         const summary = await invoke('copy_named_folders', {
           names,
           source: copySource,
           destination: copyDestination,
         });
-        setProgress(100);
-        addLog(`Finished: ${summary.completed} copied, ${summary.failed} failed`);
+        setTabProgress((prev) => ({ ...prev, copy: 100 }));
+        if (summary.outputDir) {
+          setTabOutputDir((prev) => ({ ...prev, copy: summary.outputDir }));
+        }
+        addLog(`Finished: ${summary.completed} copied, ${summary.failed} failed`, 'copy');
       } catch (err) {
-        addLog(`Copy error: ${err}`);
+        addLog(`Copy error: ${err}`, 'copy');
       } finally {
         setBusy(false);
         setStopping(false);
@@ -218,15 +339,16 @@ export default function App() {
 
     // Compression modes
     const mode = page === 'multiple' ? 'multiplefolders' : page === 'single' ? 'singlefolder' : 'files';
-    const input = mode === 'files' ? files : inputFolder ? [inputFolder] : [];
+    const currentFolder = page === 'single' ? singleFolder : page === 'multiple' ? multipleFolder : '';
+    const input = mode === 'files' ? files : currentFolder ? [currentFolder] : [];
 
     if (input.length === 0) {
-      addLog('Error: Choose image files or a source folder.');
+      addLog(page === 'file' ? 'Error: Choose image files.' : 'Error: Choose a source folder.', page);
       return;
     }
 
     if (customOutput && !outputFolder) {
-      addLog('Error: Choose a target output folder or turn off the option.');
+      addLog('Error: Choose a target output folder or turn off the option.', page);
       return;
     }
 
@@ -240,25 +362,25 @@ export default function App() {
     };
 
     setBusy(true);
-    setProgress(0);
-    setProcessedItems([]);
+    setTabProgress((prev) => ({ ...prev, [page]: 0 }));
+    setTabProcessedItems((prev) => ({ ...prev, [page]: [] }));
     try {
       const summary = await invoke('process_images', {
         input,
         mode,
-        root: inputFolder || null,
+        root: currentFolder || null,
         options,
       });
-      setProgress(100);
+      setTabProgress((prev) => ({ ...prev, [page]: 100 }));
       if (summary.items && summary.items.length > 0) {
-        setProcessedItems(summary.items);
+        setTabProcessedItems((prev) => ({ ...prev, [page]: summary.items }));
       }
       if (summary.outputDir) {
-        setOutputDir(summary.outputDir);
+        setTabOutputDir((prev) => ({ ...prev, [page]: summary.outputDir }));
       }
-      addLog(`Finished: ${summary.completed} completed, ${summary.failed} failed`);
+      addLog(`Finished: ${summary.completed} completed, ${summary.failed} failed`, page);
     } catch (err) {
-      addLog(`Process error: ${err}`);
+      addLog(`Process error: ${err}`, page);
     } finally {
       setBusy(false);
       setStopping(false);
@@ -268,11 +390,11 @@ export default function App() {
   const handleStop = async () => {
     if (stopping) return;
     setStopping(true);
-    addLog('⏹ Stopping process... finishing current file');
+    addLog('⏹ Stopping process... finishing current file', processingTabRef.current || page);
     try {
       await invoke('stop_process');
     } catch (err) {
-      addLog(`Stop error: ${err}`);
+      addLog(`Stop error: ${err}`, processingTabRef.current || page);
     }
   };
 
@@ -302,11 +424,13 @@ export default function App() {
         ? copyDestination
         : (customOutput && outputFolder
             ? outputFolder
-            : (inputFolder
-                ? `${inputFolder}\\reduced`
-                : (files.length > 0 && files[0]
-                    ? `${files[0].substring(0, Math.max(files[0].lastIndexOf('\\'), files[0].lastIndexOf('/')))}\\reduced`
-                    : '')))
+            : (page === 'single' && singleFolder
+                ? `${singleFolder}\\reduced`
+                : (page === 'multiple' && multipleFolder
+                    ? `${multipleFolder}\\reduced`
+                    : (page === 'file' && files.length > 0 && files[0]
+                        ? `${files[0].substring(0, Math.max(files[0].lastIndexOf('\\'), files[0].lastIndexOf('/')))}\\reduced`
+                        : ''))))
     );
 
     return (
@@ -484,28 +608,28 @@ export default function App() {
             /* COPY MODE */
             <>
               <div className="body-left">
-                <div className="panel" style={{ flex: 1, gap: 14 }}>
-                  <div className="field-group">
-                    <label className="field-label">Folder names</label>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Enter one folder name per line</span>
-                    <textarea
-                      rows={5}
-                      className="input-text"
-                      placeholder="Folder A, Folder B..."
-                      value={folderNames}
-                      onChange={(e) => setFolderNames(e.target.value)}
-                      style={{ resize: 'vertical' }}
-                    />
-                  </div>
-
+                <div className="panel copy-panel">
                   <div className="picker-row">
                     <div className="picker-info">
                       <span className="picker-label">Source folder</span>
                       <span className="picker-path">{copySource || 'Not selected'}</span>
                     </div>
-                    <button className="btn-secondary" onClick={handlePickCopySource}>
-                      Browse
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {copySource && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ padding: '6px 8px', borderColor: '#fecaca', color: '#dc2626' }}
+                          onClick={() => setCopySource('')}
+                          title="Clear source folder"
+                        >
+                          <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                        </button>
+                      )}
+                      <button className="btn-secondary" onClick={handlePickCopySource}>
+                        Browse
+                      </button>
+                    </div>
                   </div>
 
                   <div className="picker-row">
@@ -513,9 +637,59 @@ export default function App() {
                       <span className="picker-label">Destination folder</span>
                       <span className="picker-path">{copyDestination || 'Not selected'}</span>
                     </div>
-                    <button className="btn-secondary" onClick={handlePickCopyDestination}>
-                      Browse
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {copyDestination && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ padding: '6px 8px', borderColor: '#fecaca', color: '#dc2626' }}
+                          onClick={() => setCopyDestination('')}
+                          title="Clear destination folder"
+                        >
+                          <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                        </button>
+                      )}
+                      <button className="btn-secondary" onClick={handlePickCopyDestination}>
+                        Browse
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="field-group copy-input-group">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label className="field-label">Folder names</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>1 folder name per line</span>
+                        {folderNames && (
+                          <button
+                            type="button"
+                            style={{
+                              padding: '2px 7px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              border: '1px solid #fecaca',
+                              borderRadius: 4,
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                            }}
+                            onClick={() => setFolderNames('')}
+                          >
+                            <SolarTrashIcon width={11} height={11} fill="#dc2626" />
+                            <span>Clear</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <textarea
+                      className="copy-names-textarea"
+                      placeholder="Folder A&#10;Folder B&#10;Folder C..."
+                      value={folderNames}
+                      onChange={(e) => setFolderNames(e.target.value)}
+                    />
                   </div>
                 </div>
               </div>
@@ -530,7 +704,13 @@ export default function App() {
               <div className="body-left">
                 {page === 'file' ? (
                   <div className="panel" style={{ gap: 12 }}>
-                    <div className="dropzone" onClick={handlePickFiles}>
+                    <div
+                      className={`dropzone ${isDraggingOver ? 'dragover' : ''}`}
+                      onClick={handlePickFiles}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+                    >
                       <span className="drop-icon">
                         <SolarGallerySendIcon width={38} height={38} fill="#0077ff" />
                       </span>
@@ -538,7 +718,14 @@ export default function App() {
                         {files.length === 0 ? 'Drop images here or browse' : `${files.length} files selected`}
                       </span>
                       <span className="drop-hint">JPG · PNG · WebP · AVIF · HEIC</span>
-                      <button className="btn-secondary" style={{ marginTop: 4 }}>
+                      <button
+                        className="btn-secondary"
+                        style={{ marginTop: 4 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePickFiles();
+                        }}
+                      >
                         Browse files
                       </button>
                     </div>
@@ -567,8 +754,8 @@ export default function App() {
                             onClick={(e) => {
                               e.stopPropagation();
                               setFiles([]);
-                              setProgress(0);
-                              addLog('Cleared file queue');
+                              setTabProgress((prev) => ({ ...prev, file: 0 }));
+                              addLog('Cleared file queue', 'file');
                             }}
                           >
                             <SolarTrashIcon width={12} height={12} fill="#dc2626" />
@@ -586,24 +773,163 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : page === 'single' ? (
                   <div className="panel" style={{ gap: 12 }}>
-                    <div className="field-group">
-                      <span className="panel-header">Source folder</span>
-                      <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
-                        Images in this folder and its subfolders will be processed.
+                    <div
+                      className={`dropzone ${isDraggingOver ? 'dragover' : ''}`}
+                      onClick={handlePickSingleFolder}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+                    >
+                      <span className="drop-icon">
+                        <SolarAddFolderIcon width={38} height={38} fill="#0077ff" />
                       </span>
-                    </div>
-                    <div className="picker-row">
-                      <div className="picker-info">
-                        <span className="picker-path">{inputFolder || 'No source folder selected'}</span>
-                      </div>
-                      <button className="btn-secondary" onClick={handlePickInputFolder}>
-                        Browse source folder
+                      <span className="drop-title">
+                        {!singleFolder ? 'Drop folder here or browse' : (singleFolder.split(/[\\/]/).filter(Boolean).pop() || 'Folder selected')}
+                      </span>
+                      <span className="drop-hint">Images in folder and subfolders will be processed</span>
+                      <button
+                        className="btn-secondary"
+                        style={{ marginTop: 4 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePickSingleFolder();
+                        }}
+                      >
+                        Browse folder
                       </button>
                     </div>
+
+                    {singleFolder && (
+                      <div className="selected-files-list">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-dark)' }}>
+                            1 folder ready
+                          </span>
+                          <button
+                            type="button"
+                            style={{
+                              padding: '3px 8px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              border: '1px solid #fecaca',
+                              borderRadius: 4,
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSingleFolder('');
+                              setTabProgress((prev) => ({ ...prev, single: 0 }));
+                              addLog('Cleared single folder selection', 'single');
+                            }}
+                          >
+                            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                            <span>Clear</span>
+                          </button>
+                        </div>
+                        <div
+                          className="file-item"
+                          style={{
+                            wordBreak: 'break-all',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                          title={singleFolder}
+                        >
+                          <SolarAddFolderIcon width={14} height={14} fill="#085fd1" style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {singleFolder}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+                ) : page === 'multiple' ? (
+                  <div className="panel" style={{ gap: 12 }}>
+                    <div
+                      className={`dropzone ${isDraggingOver ? 'dragover' : ''}`}
+                      onClick={handlePickMultipleFolder}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+                    >
+                      <span className="drop-icon">
+                        <SolarAddFolderIcon width={38} height={38} fill="#0077ff" />
+                      </span>
+                      <span className="drop-title">
+                        {!multipleFolder ? 'Drop folder here or browse' : (multipleFolder.split(/[\\/]/).filter(Boolean).pop() || 'Folder selected')}
+                      </span>
+                      <span className="drop-hint">Subfolders inside this folder will be batch processed</span>
+                      <button
+                        className="btn-secondary"
+                        style={{ marginTop: 4 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePickMultipleFolder();
+                        }}
+                      >
+                        Browse folder
+                      </button>
+                    </div>
+
+                    {multipleFolder && (
+                      <div className="selected-files-list">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-dark)' }}>
+                            1 folder ready
+                          </span>
+                          <button
+                            type="button"
+                            style={{
+                              padding: '3px 8px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              border: '1px solid #fecaca',
+                              borderRadius: 4,
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMultipleFolder('');
+                              setTabProgress((prev) => ({ ...prev, multiple: 0 }));
+                              addLog('Cleared multiple folder selection', 'multiple');
+                            }}
+                          >
+                            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                            <span>Clear</span>
+                          </button>
+                        </div>
+                        <div
+                          className="file-item"
+                          style={{
+                            wordBreak: 'break-all',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                          title={multipleFolder}
+                        >
+                          <SolarAddFolderIcon width={14} height={14} fill="#085fd1" style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {multipleFolder}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
                 {renderActivityPanel()}
               </div>
