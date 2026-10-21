@@ -30,11 +30,12 @@ walkdir = "2"
 zune-heic = "0.5"
 webp = "0.3.1"
 fast_image_resize = { version = "6.1.0", features = ["image", "rayon"] }
+qcms = "0.3.0"
 
 
 # Optimization for development and dev server runs
 [profile.dev]
-opt-level = 2
+opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
