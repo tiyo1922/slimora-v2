@@ -16,8 +16,8 @@
         "title": "Slimora | Image Workspace",
         "width": 1240,
         "height": 760,
-        "minWidth": 1080,
-        "minHeight": 650,
+        "minWidth": 980,
+        "minHeight": 600,
         "dragDropEnabled": true
       }
     ],

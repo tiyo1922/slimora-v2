@@ -2,7 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { NavIcon, InfoIcon } from './Icons';
+import {
+  NavIcon,
+  InfoIcon,
+  SolarGallerySendIcon,
+  SolarGalleryWideIcon,
+  SolarSettingsIcon,
+  SolarTuningIcon,
+  SolarPlayIcon,
+  SolarTrashIcon,
+  SolarHistoryIcon,
+} from './Icons';
 import StripeProgress from './StripeProgress';
 import './App.css';
 
@@ -303,15 +313,19 @@ export default function App() {
       <div className="panel activity-panel">
         <div className="activity-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="panel-header">› Log Aktivitas</span>
+            <span className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <SolarHistoryIcon width={19} height={19} fill="#0c1f46" />
+              <span>Log Aktivitas</span>
+            </span>
             {processedItems.length > 0 && (
               <span className="activity-count-badge">
                 {processedItems.length} berkas
               </span>
             )}
           </div>
-          <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} onClick={handleClearLogs}>
-            Clear
+          <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={handleClearLogs}>
+            <SolarTrashIcon width={13} height={13} fill="currentColor" />
+            <span>Clear</span>
           </button>
         </div>
 
@@ -344,11 +358,11 @@ export default function App() {
             <table className="activity-table">
               <thead>
                 <tr>
-                  <th style={{ minWidth: '100px' }} title="Nama berkas asli">File Ori</th>
-                  <th style={{ minWidth: '110px' }} title="Nama berkas output">Output</th>
-                  <th style={{ minWidth: '75px' }} title="Ukuran berkas asli">Size Ori</th>
-                  <th style={{ minWidth: '85px' }} title="Ukuran setelah downscale">Size Akhir</th>
-                  <th style={{ minWidth: '95px' }} title="Persentase penurunan & rasio hemat">Hemat</th>
+                  <th style={{ minWidth: '95px' }} title="Nama berkas asli">File Ori</th>
+                  <th style={{ width: '68px', minWidth: '60px', textAlign: 'center' }} title="Format target output">Output</th>
+                  <th style={{ width: '75px', minWidth: '70px', textAlign: 'right' }} title="Ukuran berkas asli">Size Ori</th>
+                  <th style={{ width: '85px', minWidth: '80px', textAlign: 'right' }} title="Ukuran setelah downscale">Size Akhir</th>
+                  <th style={{ width: '90px', minWidth: '85px', textAlign: 'center' }} title="Persentase penurunan & rasio hemat">Hemat</th>
                 </tr>
               </thead>
               <tbody>
@@ -362,19 +376,16 @@ export default function App() {
                       <td className="cell-orig-name" title={item.originalName}>
                         <span className="file-name-text">{item.originalName}</span>
                       </td>
-                      <td className="cell-output-name" title={item.outputName}>
-                        <div className="cell-output-wrap">
-                          <span className={`ext-tag ${getFormatBadgeClass(ext)}`}>.{ext}</span>
-                          <span className="file-name-text">{item.outputName}</span>
-                        </div>
+                      <td className="cell-output-format" style={{ textAlign: 'center' }} title={`Format output: .${ext}`}>
+                        <span className={`ext-tag ${getFormatBadgeClass(ext)}`}>.{ext}</span>
                       </td>
-                      <td className="cell-size-orig">
+                      <td className="cell-size-orig" style={{ textAlign: 'right' }}>
                         <span className="size-badge-orig">{formatBytes(item.originalSizeBytes)}</span>
                       </td>
-                      <td className="cell-size-output">
+                      <td className="cell-size-output" style={{ textAlign: 'right' }}>
                         <span className="size-badge-downscale">{formatBytes(item.outputSizeBytes)}</span>
                       </td>
-                      <td className="cell-reduction">
+                      <td className="cell-reduction" style={{ textAlign: 'center' }}>
                         <div className="reduction-cell">
                           <span className={`reduction-pill ${item.reductionPercent >= 0 ? 'pill-positive' : 'pill-negative'}`}>
                             {item.reductionPercent >= 0 ? `↓ ${item.reductionPercent.toFixed(1)}%` : `+${Math.abs(item.reductionPercent).toFixed(1)}%`}
@@ -395,11 +406,7 @@ export default function App() {
             </div>
           ) : (
             <div className="activity-empty-state">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.6">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
+              <SolarGalleryWideIcon width={36} height={36} fill="#94a3b8" />
               <span>Belum ada aktivitas pemrosesan</span>
               <small>Klik tombol START untuk mulai memproses gambar</small>
             </div>
@@ -524,7 +531,9 @@ export default function App() {
                 {page === 'file' ? (
                   <div className="panel" style={{ gap: 12 }}>
                     <div className="dropzone" onClick={handlePickFiles}>
-                      <span className="drop-icon">⇧</span>
+                      <span className="drop-icon">
+                        <SolarGallerySendIcon width={38} height={38} fill="#0077ff" />
+                      </span>
                       <span className="drop-title">
                         {files.length === 0 ? 'Drop images here or browse' : `${files.length} files selected`}
                       </span>
@@ -543,7 +552,7 @@ export default function App() {
                           <button
                             type="button"
                             style={{
-                              padding: '2px 8px',
+                              padding: '3px 8px',
                               fontSize: 11,
                               fontWeight: 600,
                               border: '1px solid #fecaca',
@@ -551,6 +560,9 @@ export default function App() {
                               background: '#fef2f2',
                               color: '#dc2626',
                               cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
                             }}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -559,7 +571,8 @@ export default function App() {
                               addLog('Cleared file queue');
                             }}
                           >
-                            ✕ Clear
+                            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                            <span>Clear</span>
                           </button>
                         </div>
                         {files.slice(0, 4).map((f, i) => (
@@ -597,7 +610,10 @@ export default function App() {
 
               <div className="body-right">
                 <div className="panel settings-panel">
-                  <span className="panel-header">⚙ Output Settings</span>
+                  <span className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <SolarSettingsIcon width={19} height={19} fill="#0c1f46" />
+                    <span>Output Settings</span>
+                  </span>
 
                   <div className="field-group">
                     <label className="field-label">Format</label>
@@ -674,15 +690,7 @@ export default function App() {
 
                   <div className="field-group">
                     <div className="quality-header-row">
-                      <svg className="quality-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
-                        <path d="M3 7H11" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <path d="M17 7H21" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <circle cx="14" cy="7" r="2.8" fill="#ffffff" stroke="#081434" strokeWidth="2.4" />
-                        
-                        <path d="M3 17H7" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <path d="M13 17H21" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <circle cx="10" cy="17" r="2.8" fill="#ffffff" stroke="#081434" strokeWidth="2.4" />
-                      </svg>
+                      <SolarTuningIcon width={18} height={18} fill="#081434" className="quality-icon" />
                       <label className="field-label quality-title">Quality</label>
                     </div>
                     <div className="slider-container">
@@ -738,8 +746,10 @@ export default function App() {
             <button
               className="btn-primary-action"
               onClick={handleStart}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}
             >
-              {page === 'copy' ? 'START COPY  →' : 'START  →'}
+              <span>{page === 'copy' ? 'START COPY' : 'START'}</span>
+              <SolarPlayIcon width={16} height={16} fill="#ffffff" />
             </button>
           )}
         </footer>
