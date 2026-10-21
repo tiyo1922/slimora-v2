@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Creator: CorelDRAW 2020 (64-Bit) -->
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="58.2083mm" height="168.01mm" version="1.1" style="shape-rendering:geometricPrecision; text-rendering:geometricPrecision; image-rendering:optimizeQuality; fill-rule:evenodd; clip-rule:evenodd"
+viewBox="0 0 2568.96 7414.96"
+ xmlns:xlink="http://www.w3.org/1999/xlink"
+ xmlns:xodm="http://www.corel.com/coreldraw/odm/2003">
+ <defs>
+  <style type="text/css">
+   <![CDATA[
+    .fil1 {fill:none}
+    .fil2 {fill:url(#id2)}
+    .fil3 {fill:url(#id3)}
+    .fil0 {fill:url(#id4);fill-rule:nonzero}
+   ]]>
+  </style>
+   <clipPath id="id0">
+    <path d="M-0 5393.79l2568.96 0 0 2021.17 -2568.96 0 0 -2021.17z"/>
+   </clipPath>
+   <clipPath id="id1">
+    <path d="M-0 5393.79l119.31 0c-10.57,30.17 8.13,62.45 40.24,67.59l347.64 47.65c58.72,-5.95 61.81,-91.87 2.56,-101.35l-101.27 -13.88 2160.47 0 0 2021.17 -2568.96 0 0 -2021.17z"/>
+   </clipPath>
+  <linearGradient id="id2" gradientUnits="userSpaceOnUse" x1="1599.15" y1="5414.45" x2="969.81" y2="7394.3">
+   <stop offset="0" style="stop-opacity:1; stop-color:#0D58D7"/>
+   <stop offset="1" style="stop-opacity:1; stop-color:#022E73"/>
+  </linearGradient>
+  <linearGradient id="id3" gradientUnits="userSpaceOnUse" x1="1047.12" y1="7406.61" x2="1521.85" y2="5477.56">
+   <stop offset="0" style="stop-opacity:1; stop-color:#01306B"/>
+   <stop offset="0.368627" style="stop-opacity:1; stop-color:#024698"/>
+   <stop offset="1" style="stop-opacity:1; stop-color:#045CC5"/>
+  </linearGradient>
+  <linearGradient id="id4" gradientUnits="userSpaceOnUse" x1="-0" y1="0" x2="-0" y2="7414.96">
+   <stop offset="0" style="stop-opacity:1; stop-color:#0A4F9E"/>
+   <stop offset="0.501961" style="stop-opacity:1; stop-color:#073F85"/>
+   <stop offset="1" style="stop-opacity:1; stop-color:#052B5E"/>
+  </linearGradient>
+ </defs>
+ <g id="Layer_x0020_1">
+  <metadata id="CorelCorpID_0Corel-Layer"/>
+  <rect class="fil0" x="-0" width="2568.96" height="7414.96"/>
+  <path class="fil1" d="M2568.96 5393.79c-910.4,92.39 -685.05,979.13 -2568.96,719.98"/>
+  <g style="clip-path:url(#id0)">
+   <image x="-0" y="5393.79" width="2568.96" height="2021.17" xlink:href="sidebar_background-new_Images\sidebar_background-new_ImgID1.png"/>
+  </g>
+  <path class="fil2" d="M-0 7414.96l2568.96 0 0 -2021.17c-910.4,92.39 -685.05,979.13 -2568.96,719.98l0 1301.18z"/>
+  <g style="clip-path:url(#id1)">
+   <image x="-0" y="5393.79" width="2568.96" height="2021.17" xlink:href="sidebar_background-new_Images\sidebar_background-new_ImgID2.png"/>
+  </g>
+  <path class="fil3" d="M2568.96 6666.02c-797.73,135.2 -1487.29,-1068.35 -2568.96,-1196.81l0 1945.74 2568.96 0 0 -748.93z"/>
+ </g>
+</svg>

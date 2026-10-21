@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stripe Progress</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0F1117;
+      color: #E6E8EF;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { padding: 16px 24px; }
+    .row { display: flex; align-items: center; gap: 12px; }
+    label { font-size: 14px; color: #9AA0B4; }
+    input[type=range] { flex: 1; accent-color: #00D6B4; }
+    #out { font-size: 14px; font-weight: 500; min-width: 40px; }
+    button {
+      background: #1E2130;
+      color: #E6E8EF;
+      border: 1px solid #373C50;
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { background: #262A3D; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div style="width: 100%;"><canvas id="bar"></canvas></div>
+    <div class="row" style="margin-top: 16px;">
+      <label>Target</label>
+      <input type="range" min="0" max="100" value="60" id="tgt" />
+      <span id="out">60%</span>
+    </div>
+    <div class="row" style="margin-top: 12px;">
+      <button id="rst">Reset</button>
+      <button id="fin">Selesai</button>
+    </div>
+  </div>
+
+  <script>
+    const cv = document.getElementById('bar');
+    const ctx = cv.getContext('2d');
+    const tgt = document.getElementById('tgt');
+    const out = document.getElementById('out');
+    let target = 0.6, shown = 0, t = 0, last = performance.now();
+    const cA = [0, 214, 180], cB = [132, 92, 255], H = 52;
+
+    tgt.addEventListener('input', () => { target = tgt.value / 100; out.textContent = tgt.value + '%'; });
+    document.getElementById('rst').addEventListener('click', () => { target = 0; tgt.value = 0; out.textContent = '0%'; });
+    document.getElementById('fin').addEventListener('click', () => { target = 1; tgt.value = 100; out.textContent = '100%'; });
+
+    function rr(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function frame(now) {
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      t += dt;
+      shown += (target - shown) * (1 - Math.exp(-dt * 5));
+
+      const W = cv.parentElement.clientWidth;
+      const dpr = window.devicePixelRatio || 1;
+      cv.width = W * dpr; cv.height = H * dpr;
+      cv.style.width = W + 'px'; cv.style.height = H + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+
+      const r = H / 2;
+      rr(0.5, 0.5, W - 1, H - 1, r);
+      ctx.fillStyle = '#181A26';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#373C50';
+      ctx.stroke();
+
+      const p = Math.max(0, Math.min(1, shown));
+      const fillW = W * p;
+      if (fillW > 2) {
+        ctx.save();
+        rr(0, 0, W, H, r);
+        ctx.clip();
+
+        const g = ctx.createLinearGradient(0, 0, fillW, 0);
+        g.addColorStop(0, `rgb(${cA.join(',')})`);
+        g.addColorStop(1, `rgb(${cB.join(',')})`);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, fillW, H);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, fillW, H);
+        ctx.clip();
+        const sp = 16, sw = 7, off = (t * 36) % sp;
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        for (let x = -H - sp + off; x < fillW + H; x += sp) {
+          ctx.beginPath();
+          ctx.moveTo(x, H);
+          ctx.lineTo(x + H, 0);
+          ctx.lineTo(x + H + sw, 0);
+          ctx.lineTo(x + sw, H);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+
+        const sx = (t * 140) % (W + 120) - 60;
+        const sg = ctx.createLinearGradient(sx - 60, 0, sx + 60, 0);
+        sg.addColorStop(0, 'rgba(255,255,255,0)');
+        sg.addColorStop(0.5, 'rgba(255,255,255,0.28)');
+        sg.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = sg;
+        ctx.fillRect(0, 0, fillW, H);
+        ctx.restore();
+
+        const pulse = 0.5 + 0.5 * Math.sin(t * 6);
+        const hx = fillW, hy = H / 2;
+        [[18 + pulse * 3, 0.07], [11 + pulse * 2, 0.16], [5, 0.9]].forEach(([rad, a]) => {
+          ctx.beginPath();
+          ctx.arc(hx, hy, rad, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(180,255,240,${a})`;
+          ctx.fill();
+        });
+      }
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '500 21px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(Math.round(p * 100) + '%', W / 2, H / 2);
+
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
