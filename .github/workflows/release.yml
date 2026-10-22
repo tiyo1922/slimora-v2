@@ -1,0 +1,135 @@
+name: Release Slimora
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-windows:
+    name: Build and Publish Windows Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Validate Signing Secret and Version Alignment
+        shell: powershell
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          # 1. Validasi keberadaan private key
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY)) {
+            Write-Error "CRITICAL: Secret TAURI_SIGNING_PRIVATE_KEY belum dikonfigurasi di GitHub Repository Secrets! Signing updater tidak dapat dilakukan."
+            exit 1
+          }
+          Write-Host "✅ Secret TAURI_SIGNING_PRIVATE_KEY terdeteksi."
+
+          # 2. Validasi format tag SemVer (vX.Y.Z)
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v\d+\.\d+\.\d+') {
+            Write-Error "CRITICAL: Format tag '$tag' tidak valid. Tag harus mengikuti format SemVer, misal: v2.0.1"
+            exit 1
+          }
+          $targetVersion = $tag -replace '^v', ''
+          Write-Host "Target Release Version: $targetVersion"
+
+          # 3. Validasi versi di package.json
+          $packageJson = Get-Content "package.json" -Raw | ConvertFrom-Json
+          if ($packageJson.version -ne $targetVersion) {
+            Write-Error "CRITICAL: Versi di package.json ($($packageJson.version)) tidak sesuai dengan tag ($targetVersion)!"
+            exit 1
+          }
+          Write-Host "✅ package.json version matches: $($packageJson.version)"
+
+          # 4. Validasi versi dan pubkey di src-tauri/tauri.conf.json
+          $tauriConf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          if ($tauriConf.version -ne $targetVersion) {
+            Write-Error "CRITICAL: Versi di src-tauri/tauri.conf.json ($($tauriConf.version)) tidak sesuai dengan tag ($targetVersion)!"
+            exit 1
+          }
+          Write-Host "✅ tauri.conf.json version matches: $($tauriConf.version)"
+
+          if ([string]::IsNullOrWhiteSpace($tauriConf.plugins.updater.pubkey) -or $tauriConf.plugins.updater.pubkey -match 'PLACEHOLDER') {
+            Write-Error "CRITICAL: pubkey updater di tauri.conf.json kosong atau masih placeholder!"
+            exit 1
+          }
+          Write-Host "✅ tauri.conf.json pubkey valid."
+
+          # 5. Validasi versi di src-tauri/Cargo.toml
+          $cargoToml = Get-Content "src-tauri/Cargo.toml" -Raw
+          if ($cargoToml -match '(?m)^version\s*=\s*"([^"]+)"') {
+            $cargoVersion = $matches[1]
+            if ($cargoVersion -ne $targetVersion) {
+              Write-Error "CRITICAL: Versi di src-tauri/Cargo.toml ($cargoVersion) tidak sesuai dengan tag ($targetVersion)!"
+              exit 1
+            }
+            Write-Host "✅ Cargo.toml version matches: $cargoVersion"
+          } else {
+            Write-Error "CRITICAL: Tidak dapat menemukan field version di src-tauri/Cargo.toml!"
+            exit 1
+          }
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build and Publish Tauri Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Slimora v__VERSION__'
+          releaseBody: 'Slimora release v__VERSION__ untuk Windows x64. Termasuk installer NSIS dan artefak updater otomatis.'
+          releaseDraft: false
+          prerelease: false
+
+      - name: Post-Release Verification
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Write-Host "Memverifikasi artefak release yang berhasil dipublikasikan..."
+          $tag = $env:GITHUB_REF_NAME
+          $releaseInfo = gh release view $tag --json assets | ConvertFrom-Json
+          $assetNames = $releaseInfo.assets | ForEach-Object { $_.name }
+          Write-Host "Aset yang terunggah ke release $tag:"
+          $assetNames | ForEach-Object { Write-Host " - $_" }
+
+          $hasExe = $assetNames | Where-Object { $_ -like "*Slimora*setup.exe" -or $_ -like "*Slimora*.exe" }
+          $hasSig = $assetNames | Where-Object { $_ -like "*.sig" }
+          $hasLatestJson = $assetNames | Where-Object { $_ -eq "latest.json" }
+
+          if (-not $hasExe) {
+            Write-Error "CRITICAL: Installer Windows (.exe) tidak ditemukan pada rilis!"
+            exit 1
+          }
+          if (-not $hasSig) {
+            Write-Error "CRITICAL: File signature (.sig) tidak ditemukan pada rilis!"
+            exit 1
+          }
+          if (-not $hasLatestJson) {
+            Write-Error "CRITICAL: Manifest updater 'latest.json' tidak ditemukan pada rilis!"
+            exit 1
+          }
+          Write-Host "✅ Verifikasi rilis sukses: Seluruh artefak wajib (Installer, Signature, latest.json) tersedia!"

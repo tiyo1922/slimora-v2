@@ -14,9 +14,20 @@ import {
   SolarHistoryIcon,
   SolarAddFolderIcon,
   SolarTagIcon,
+  UpdateCircleIcon,
+  ChevronRightIcon,
 } from './Icons';
+import { check } from '@tauri-apps/plugin-updater';
 import StripeProgress from './StripeProgress';
 import './App.css';
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
 
 export default function App() {
   const [page, setPage] = useState('file'); // 'file' | 'single' | 'multiple' | 'copy'
@@ -35,6 +46,17 @@ export default function App() {
   const [prefix, setPrefix] = useState('');
   const [showPrefixModal, setShowPrefixModal] = useState(false);
   const [showNewsModal, setShowNewsModal] = useState(false);
+
+  // Real updater state (manual trigger only, hidden by default)
+  const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'checking' | 'available' | 'upToDate' | 'error'
+  const [updateInfo, setUpdateInfo] = useState(null); // stores the real Update object from Tauri Updater
+  const [updateFeedback, setUpdateFeedback] = useState(null); // { type: 'success' | 'error' | 'info', message: string }
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null); // { percent: 0, downloaded: 0, total: 0 }
+  const [downloadError, setDownloadError] = useState(null);
+  const [downloadFinished, setDownloadFinished] = useState(false);
+
   const [hasReadNews, setHasReadNews] = useState(() => {
     try {
       return localStorage.getItem('slimora_news_read_v2.0.1') === 'true';
@@ -60,6 +82,96 @@ export default function App() {
     setShowNewsModal(false);
   };
 
+  const handleCheckUpdate = async () => {
+    if (updateStatus === 'checking') return;
+    setUpdateStatus('checking');
+    setUpdateFeedback(null);
+
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateInfo(update);
+        setUpdateStatus('available');
+        setUpdateFeedback({
+          type: 'info',
+          message: `Versi baru v${update.version} ditemukan. Klik kartu untuk melihat detail.`,
+        });
+      } else {
+        setUpdateStatus('upToDate');
+        setUpdateInfo(null);
+        setUpdateFeedback({
+          type: 'success',
+          message: 'Slimora sudah versi terbaru (v2.0.1).',
+        });
+        setTimeout(() => {
+          setUpdateFeedback((prev) => (prev?.type === 'success' ? null : prev));
+        }, 4500);
+      }
+    } catch (err) {
+      console.error('Pemeriksaan pembaruan gagal:', err);
+      setUpdateStatus('error');
+      setUpdateInfo(null);
+      const errMsg = err?.message || String(err);
+      let userMsg = errMsg;
+      if (errMsg.includes('404') || errMsg.includes('Not Found')) {
+        userMsg = 'Belum ada rilis versi baru di server (404).';
+      } else if (errMsg.includes('pubkey') || errMsg.includes('signature')) {
+        userMsg = 'Verifikasi tanda tangan gagal atau belum dikonfigurasi.';
+      } else if (errMsg.includes('network') || errMsg.includes('connection') || errMsg.includes('dns')) {
+        userMsg = 'Koneksi internet bermasalah. Periksa jaringan Anda.';
+      }
+      setUpdateFeedback({
+        type: 'error',
+        message: `Gagal memeriksa: ${userMsg}`,
+      });
+    }
+  };
+
+  const handleOpenUpdateModal = () => {
+    if (updateStatus === 'available' && updateInfo) {
+      setShowUpdateModal(true);
+      setDownloadError(null);
+    }
+  };
+
+  const handleCloseUpdateModal = () => {
+    if (!isDownloading) {
+      setShowUpdateModal(false);
+      setDownloadError(null);
+    }
+  };
+
+  const handleStartDownloadAndInstall = async () => {
+    if (!updateInfo || isDownloading) return;
+    setIsDownloading(true);
+    setDownloadError(null);
+    setDownloadFinished(false);
+    setDownloadProgress({ percent: 0, downloaded: 0, total: 0 });
+
+    let downloadedBytes = 0;
+    let totalBytes = 0;
+
+    try {
+      await updateInfo.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          totalBytes = event.data.contentLength || 0;
+          setDownloadProgress({ percent: 0, downloaded: 0, total: totalBytes });
+        } else if (event.event === 'Progress') {
+          downloadedBytes += event.data.chunkLength;
+          const percent = totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
+          setDownloadProgress({ percent, downloaded: downloadedBytes, total: totalBytes });
+        } else if (event.event === 'Finished') {
+          setDownloadProgress({ percent: 100, downloaded: totalBytes, total: totalBytes });
+          setDownloadFinished(true);
+        }
+      });
+    } catch (err) {
+      console.error('Download dan instalasi update gagal:', err);
+      setDownloadError(err?.message || String(err));
+      setIsDownloading(false);
+    }
+  };
+
   useEffect(() => {
     if (showPrefixModal) {
       const timer = setTimeout(() => {
@@ -77,13 +189,17 @@ export default function App() {
       if (e.key === 'Escape') {
         if (showNewsModal) setShowNewsModal(false);
         if (showPrefixModal) setShowPrefixModal(false);
+        if (showUpdateModal && !isDownloading) {
+          setShowUpdateModal(false);
+          setDownloadError(null);
+        }
       }
     };
-    if (showPrefixModal || showNewsModal) {
+    if (showPrefixModal || showNewsModal || showUpdateModal) {
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
     }
-  }, [showPrefixModal, showNewsModal]);
+  }, [showPrefixModal, showNewsModal, showUpdateModal, isDownloading]);
   const [folderNames, setFolderNames] = useState('');
   const [copySource, setCopySource] = useState('');
   const [copyDestination, setCopyDestination] = useState('');
@@ -670,12 +786,47 @@ export default function App() {
         </nav>
 
         <div className="sidebar-footer">
+          {updateStatus === 'available' && updateInfo && (
+            <button
+              type="button"
+              className="update-indicator-btn"
+              onClick={handleOpenUpdateModal}
+              title={`Pembaruan Slimora v${updateInfo.version} tersedia. Klik untuk melihat detail.`}
+            >
+              <div className="update-indicator-left">
+                <UpdateCircleIcon size={26} />
+                <div className="update-text-col">
+                  <span className="update-title">Versi {updateInfo.version} tersedia</span>
+                  <span className="update-subtitle">Perbarui Slimora sekarang</span>
+                </div>
+              </div>
+              <ChevronRightIcon width={14} height={14} className="update-chevron" />
+            </button>
+          )}
+
           <div className="sidebar-divider" />
+
           <div className="version-info">
-            <div className="version-info-left">
+            <button
+              type="button"
+              className={`version-check-btn ${updateStatus === 'checking' ? 'is-checking' : ''}`}
+              onClick={handleCheckUpdate}
+              disabled={updateStatus === 'checking'}
+              title={
+                updateStatus === 'checking'
+                  ? 'Sedang memeriksa pembaruan...'
+                  : 'Klik untuk periksa pembaruan Slimora'
+              }
+            >
               <InfoIcon />
-              <span>Version 2.0.1</span>
-            </div>
+              <span className="version-text">Version 2.0.1</span>
+              {updateStatus === 'checking' ? (
+                <span className="version-checking-spinner" />
+              ) : (
+                <span className="version-check-badge">Cek Update</span>
+              )}
+            </button>
+
             <button
               type="button"
               className={`version-news-btn ${!hasReadNews ? 'has-unread' : ''}`}
@@ -686,6 +837,23 @@ export default function App() {
               <span className="news-btn-text">NEWS</span>
             </button>
           </div>
+
+          {updateFeedback && (
+            <div className={`update-feedback-toast ${updateFeedback.type}`}>
+              <span className="update-feedback-icon">
+                {updateFeedback.type === 'success' ? '✓' : updateFeedback.type === 'error' ? '⚠️' : 'ℹ️'}
+              </span>
+              <span className="update-feedback-text">{updateFeedback.message}</span>
+              <button
+                type="button"
+                className="update-feedback-dismiss"
+                onClick={() => setUpdateFeedback(null)}
+                title="Tutup notifikasi"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -1361,6 +1529,137 @@ export default function App() {
                 onClick={handleCloseNews}
               >
                 Mengerti & Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Available Modal Popup (Real Tauri Updater) */}
+      {showUpdateModal && updateInfo && (
+        <div className="modal-overlay" onClick={handleCloseUpdateModal}>
+          <div className="modal-card update-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="update-modal-header">
+              <div className="update-modal-header-left">
+                <div className="update-modal-badge-row">
+                  <span className="update-modal-badge">✨ PEMBARUAN TERSEDIA</span>
+                  <span className="update-modal-version-tag">v{updateInfo.version}</span>
+                </div>
+                <h2 className="update-modal-title">Pembaruan Slimora Tersedia</h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseUpdateModal}
+                disabled={isDownloading && !downloadError}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="update-modal-body">
+              {/* Version Comparison Box */}
+              <div className="update-version-card">
+                <div className="update-version-col">
+                  <span className="update-version-label">Versi Saat Ini</span>
+                  <span className="update-version-value">{updateInfo.currentVersion || '2.0.1'}</span>
+                </div>
+                <div className="update-version-arrow">➔</div>
+                <div className="update-version-col">
+                  <span className="update-version-label">Versi Terbaru</span>
+                  <div className="update-version-badge-val">
+                    <span className="update-version-value highlight">{updateInfo.version}</span>
+                    <span className="update-ready-tag">Tersedia</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Download & Installation Progress Box */}
+              {isDownloading && (
+                <div className="update-download-box">
+                  <div className="update-download-header">
+                    <span className="update-download-label">
+                      {downloadFinished
+                        ? 'Unduhan selesai! Mempersiapkan instalasi...'
+                        : 'Mengunduh pembaruan...'}
+                    </span>
+                    <span className="update-download-percent">{downloadProgress?.percent || 0}%</span>
+                  </div>
+                  <div className="update-progress-track">
+                    <div
+                      className="update-progress-bar"
+                      style={{ width: `${downloadProgress?.percent || 0}%` }}
+                    />
+                  </div>
+                  <div className="update-download-meta">
+                    <span>
+                      {formatBytes(downloadProgress?.downloaded || 0)} / {formatBytes(downloadProgress?.total || 0)}
+                    </span>
+                    {!downloadFinished && (
+                      <span className="update-download-pulse">Memproses paket pembaruan...</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Download Error Banner */}
+              {downloadError && (
+                <div className="update-error-banner">
+                  <span className="update-error-icon">⚠️</span>
+                  <div className="update-error-text">
+                    <strong>Gagal mengunduh atau memasang pembaruan:</strong>
+                    <p>{downloadError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Release Notes Area */}
+              <div className="update-notes-card">
+                <div className="update-notes-header">
+                  <span className="update-notes-title">Catatan Rilis (v{updateInfo.version})</span>
+                  {updateInfo.date && (
+                    <span className="update-notes-version">{updateInfo.date}</span>
+                  )}
+                </div>
+                <div className="update-notes-content">
+                  {updateInfo.body ? (
+                    <div className="update-notes-body-text">{updateInfo.body}</div>
+                  ) : (
+                    <div className="update-notes-body-text" style={{ fontStyle: 'italic', color: '#64748b' }}>
+                      Tidak ada catatan rilis khusus yang dilampirkan untuk versi ini.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="update-modal-footer">
+              <button
+                type="button"
+                className="update-btn-later"
+                onClick={handleCloseUpdateModal}
+                disabled={isDownloading && !downloadError}
+              >
+                {downloadError ? 'Tutup' : 'Nanti'}
+              </button>
+              <button
+                type="button"
+                className="update-btn-primary"
+                onClick={handleStartDownloadAndInstall}
+                disabled={isDownloading}
+              >
+                {isDownloading ? (
+                  <>
+                    <span className="btn-spinner" />
+                    <span>{downloadFinished ? 'Memasang...' : 'Mengunduh...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <UpdateCircleIcon size={18} />
+                    <span>{downloadError ? 'Coba Lagi' : 'Update Sekarang'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

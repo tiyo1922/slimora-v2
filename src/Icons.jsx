@@ -239,3 +239,55 @@ export function SolarTagIcon({ width = 20, height = 20, fill = "currentColor", c
     </svg>
   );
 }
+
+export function UpdateCircleIcon({ size = 26, className = "" }) {
+  return (
+    <div
+      className={className}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        backgroundColor: '#d0e5ff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        boxShadow: '0 2px 5px rgba(0, 50, 140, 0.25)',
+      }}
+    >
+      <svg
+        width={size * 0.54}
+        height={size * 0.54}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="#062f6e"
+        strokeWidth="3.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <line x1="12" y1="19" x2="12" y2="5" />
+        <polyline points="5 12 12 5 19 12" />
+      </svg>
+    </div>
+  );
+}
+
+export function ChevronRightIcon({ width = 14, height = 14, stroke = "currentColor", className = "" }) {
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={stroke}
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}
+

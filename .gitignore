@@ -26,3 +26,8 @@ dist-ssr
 # Tauri / Cargo
 src-tauri/target/
 src-tauri/target_check/
+
+# Tauri auto-updater signing keys
+.tauri/
+*.key
+*.key.pub
