@@ -13,6 +13,7 @@ import {
   SolarTrashIcon,
   SolarHistoryIcon,
   SolarAddFolderIcon,
+  SolarTagIcon,
 } from './Icons';
 import StripeProgress from './StripeProgress';
 import './App.css';
@@ -32,6 +33,57 @@ export default function App() {
   const [maxKb, setMaxKb] = useState('180');
   const [quality, setQuality] = useState(85);
   const [prefix, setPrefix] = useState('');
+  const [showPrefixModal, setShowPrefixModal] = useState(false);
+  const [showNewsModal, setShowNewsModal] = useState(false);
+  const [hasReadNews, setHasReadNews] = useState(() => {
+    try {
+      return localStorage.getItem('slimora_news_read_v2.0.1') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const prefixInputRef = useRef(null);
+
+  const handleOpenNews = () => {
+    setShowNewsModal(true);
+    if (!hasReadNews) {
+      setHasReadNews(true);
+      try {
+        localStorage.setItem('slimora_news_read_v2.0.1', 'true');
+      } catch (e) {
+        // ignore
+      }
+    }
+  };
+
+  const handleCloseNews = () => {
+    setShowNewsModal(false);
+  };
+
+  useEffect(() => {
+    if (showPrefixModal) {
+      const timer = setTimeout(() => {
+        if (prefixInputRef.current) {
+          prefixInputRef.current.focus();
+          prefixInputRef.current.select();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [showPrefixModal]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showNewsModal) setShowNewsModal(false);
+        if (showPrefixModal) setShowPrefixModal(false);
+      }
+    };
+    if (showPrefixModal || showNewsModal) {
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [showPrefixModal, showNewsModal]);
   const [folderNames, setFolderNames] = useState('');
   const [copySource, setCopySource] = useState('');
   const [copyDestination, setCopyDestination] = useState('');
@@ -352,13 +404,29 @@ export default function App() {
       return;
     }
 
+    // On file tab, open prefix modal popup so user is always reminded to configure prefix
+    if (page === 'file') {
+      setShowPrefixModal(true);
+      return;
+    }
+
+    await executeCompression(prefix);
+  };
+
+  const executeCompression = async (prefixToUse = prefix) => {
+    const mode = page === 'multiple' ? 'multiplefolders' : page === 'single' ? 'singlefolder' : 'files';
+    const currentFolder = page === 'single' ? singleFolder : page === 'multiple' ? multipleFolder : '';
+    const input = mode === 'files' ? files : currentFolder ? [currentFolder] : [];
+
+    const cleanPrefix = page === 'file' ? (prefixToUse || '').trim().replace(/_+$/, '') : '';
+
     const options = {
       outputFormat: format,
       maxKb: Math.max(1, Math.min(5000, parseInt(maxKb, 10) || 180)),
       quality: quality,
       maxWidth: 1024,
       customOutput: customOutput && outputFolder ? outputFolder : null,
-      filenamePrefix: prefix.trim(),
+      filenamePrefix: cleanPrefix,
     };
 
     setBusy(true);
@@ -385,6 +453,18 @@ export default function App() {
       setBusy(false);
       setStopping(false);
     }
+  };
+
+  const handleConfirmPrefix = (prefixValue) => {
+    setShowPrefixModal(false);
+    setPrefix(prefixValue);
+    executeCompression(prefixValue);
+  };
+
+  const handleSkipPrefix = () => {
+    setShowPrefixModal(false);
+    setPrefix('');
+    executeCompression('');
   };
 
   const handleStop = async () => {
@@ -447,8 +527,13 @@ export default function App() {
               </span>
             )}
           </div>
-          <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={handleClearLogs}>
-            <SolarTrashIcon width={13} height={13} fill="currentColor" />
+          <button
+            type="button"
+            className="btn-clear-log"
+            onClick={handleClearLogs}
+            title="Bersihkan log aktivitas"
+          >
+            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
             <span>Clear</span>
           </button>
         </div>
@@ -587,8 +672,19 @@ export default function App() {
         <div className="sidebar-footer">
           <div className="sidebar-divider" />
           <div className="version-info">
-            <InfoIcon />
-            <span>Version 2.0.1</span>
+            <div className="version-info-left">
+              <InfoIcon />
+              <span>Version 2.0.1</span>
+            </div>
+            <button
+              type="button"
+              className={`version-news-btn ${!hasReadNews ? 'has-unread' : ''}`}
+              onClick={handleOpenNews}
+              title="Lihat Update News v2.0.1"
+            >
+              {!hasReadNews && <span className="news-red-dot" />}
+              <span className="news-btn-text">NEWS</span>
+            </button>
           </div>
         </div>
       </aside>
@@ -1034,19 +1130,6 @@ export default function App() {
                       <span className="slider-value-text">{quality}</span>
                     </div>
                   </div>
-
-                  {page === 'file' && (
-                    <div className="field-group">
-                      <label className="field-label">Filename prefix (optional)</label>
-                      <input
-                        type="text"
-                        className="input-text"
-                        placeholder="prefix_"
-                        value={prefix}
-                        onChange={(e) => setPrefix(e.target.value)}
-                      />
-                    </div>
-                  )}
                 </div>
               </div>
             </>
@@ -1080,6 +1163,209 @@ export default function App() {
           )}
         </footer>
       </main>
+
+      {/* Prefix Modal Popup (File Tab only) */}
+      {showPrefixModal && page === 'file' && (
+        <div className="modal-overlay" onClick={() => setShowPrefixModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-header-left">
+                <div className="modal-icon-badge">
+                  <SolarTagIcon width={20} height={20} fill="#0064f4" />
+                </div>
+                <div>
+                  <h3 className="modal-title">Prefix Nama File</h3>
+                  <p className="modal-subtitle">Atur awalan nama file sebelum kompresi dimulai</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setShowPrefixModal(false)}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p className="modal-field-desc">
+                Tambahkan awalan nama untuk file hasil kompresi agar mudah dibedakan dan tidak menimpa file asli:
+              </p>
+
+              <div className="modal-input-wrap">
+                <input
+                  ref={prefixInputRef}
+                  type="text"
+                  className="modal-input-text"
+                  placeholder="Contoh: opt, web, min..."
+                  value={prefix}
+                  onChange={(e) => setPrefix(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleConfirmPrefix(prefix);
+                    }
+                  }}
+                />
+                {prefix && (
+                  <button
+                    type="button"
+                    className="modal-input-clear"
+                    onClick={() => setPrefix('')}
+                    title="Hapus prefix"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <div className="modal-preview-box">
+                <div className="modal-preview-label">
+                  <span>Preview Nama File</span>
+                  <span className="modal-preview-badge-count">{files.length} file</span>
+                </div>
+                <div className="modal-preview-flow">
+                  {(() => {
+                    const sampleFile = files[0] ? files[0].split(/[\\/]/).pop() : 'contoh_gambar.jpg';
+                    const lastDot = sampleFile.lastIndexOf('.');
+                    const sampleStem = lastDot > 0 ? sampleFile.slice(0, lastDot) : sampleFile;
+                    const previewExt = format === 'jpeg' ? 'jpg' : format;
+                    const cleanP = (prefix || '').trim().replace(/_+$/, '');
+                    return (
+                      <>
+                        <span className="modal-preview-orig" title={sampleFile}>{sampleFile}</span>
+                        <span className="modal-preview-arrow">➔</span>
+                        <span className="modal-preview-dest">
+                          {cleanP ? (
+                            <>
+                              <span className="modal-preview-prefix-highlight">{cleanP}_</span>
+                              {sampleStem}.{previewExt}
+                            </>
+                          ) : (
+                            `${sampleStem}.${previewExt}`
+                          )}
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="modal-btn-ghost"
+                onClick={handleSkipPrefix}
+              >
+                Tanpa Prefix
+              </button>
+              <div className="modal-footer-right">
+                <button
+                  type="button"
+                  className="modal-btn-cancel"
+                  onClick={() => setShowPrefixModal(false)}
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  className="modal-btn-start"
+                  onClick={() => handleConfirmPrefix(prefix)}
+                >
+                  <SolarPlayIcon width={14} height={14} fill="#ffffff" />
+                  <span>Mulai Kompresi</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update News Modal Popup */}
+      {showNewsModal && (
+        <div className="modal-overlay" onClick={handleCloseNews}>
+          <div className="modal-card news-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="news-modal-header">
+              <div>
+                <span className="news-badge-tag">✨ UPDATE v2.0.1</span>
+                <h2 className="news-modal-title">SLIMORA v2.0.1 — UPDATE NEWS</h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseNews}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="news-modal-body">
+              <div className="news-intro-box">
+                Pembaruan Slimora v2.0.1 menghadirkan sejumlah perbaikan dan fitur baru untuk meningkatkan kualitas dan kenyamanan pengolahan gambar.
+              </div>
+
+              <div className="news-items-list">
+                <div className="news-item-card">
+                  <div className="news-item-num">1</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Perbaikan Warna Gambar</h4>
+                    <p className="news-item-desc">
+                      Memperbaiki masalah perubahan warna gambar setelah proses pengolahan agar hasilnya tetap mendekati gambar asli.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="news-item-card">
+                  <div className="news-item-num">2</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Peningkatan Stabilitas Aplikasi</h4>
+                    <p className="news-item-desc">
+                      Memperbaiki masalah aplikasi yang terkadang macet atau tidak merespons saat digunakan.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="news-item-card">
+                  <div className="news-item-num">3</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Pilihan Format Output</h4>
+                    <p className="news-item-desc">
+                      Tersedia empat pilihan format hasil gambar, yaitu PNG, JPG, WebP, dan AVIF, sesuai kebutuhan pengolahan.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="news-item-card">
+                  <div className="news-item-num">4</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Dukungan Format Gambar Tambahan</h4>
+                    <p className="news-item-desc">
+                      Mendukung pemrosesan gambar berformat HEIC dan WebP, sehingga lebih banyak jenis file gambar dapat diolah.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="news-summary-banner">
+                Slimora v2.0.1 — Pengolahan gambar yang lebih stabil, fleksibel, dan nyaman.
+              </div>
+            </div>
+
+            <div className="news-modal-footer">
+              <button
+                type="button"
+                className="news-modal-close-action"
+                onClick={handleCloseNews}
+              >
+                Mengerti & Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

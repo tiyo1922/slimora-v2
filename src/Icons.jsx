@@ -230,3 +230,12 @@ export function SolarAddFolderIcon({ width = 24, height = 24, fill = "currentCol
     </svg>
   );
 }
+
+export function SolarTagIcon({ width = 20, height = 20, fill = "currentColor", className = "" }) {
+  return (
+    <svg width={width} height={height} viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M12.5858 2.58579C12.9609 2.21071 13.4696 2 14 2H19C20.6569 2 22 3.34315 22 5V10C22 10.5304 21.7893 11.0391 21.4142 11.4142L11.4142 21.4142C10.6332 22.1953 9.36683 22.1953 8.58579 21.4142L2.58579 15.4142C1.80474 14.6332 1.80474 13.3668 2.58579 12.5858L12.5858 2.58579Z" fill={fill}/>
+      <circle cx="17.5" cy="6.5" r="1.5" fill="#ffffff"/>
+    </svg>
+  );
+}
