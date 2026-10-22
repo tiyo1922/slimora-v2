@@ -15,6 +15,27 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Tag Points to Main Branch (Production Guardrail)
+        shell: powershell
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $sha = $env:GITHUB_SHA
+          Write-Host "Memeriksa asal commit untuk tag $tag ($sha)..."
+
+          # Ambil referensi terbaru branch main dari remote
+          git fetch origin main
+
+          # Verifikasi apakah commit tag adalah bagian dari origin/main
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "CRITICAL: Tag '$tag' menunjuk ke commit ($sha) yang BUKAN merupakan bagian dari branch 'main'! Rilis produksi dan auto-updater hanya diizinkan untuk commit yang sudah dimerge ke branch 'main'."
+            exit 1
+          }
+          Write-Host "✅ Verifikasi branch lolos: Commit merupakan bagian resmi dari branch 'main' (Production)."
+
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
