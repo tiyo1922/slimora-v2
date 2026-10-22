@@ -572,12 +572,126 @@ fn decode_image(path: &Path) -> Result<DynamicImage> {
     let reader = image::ImageReader::new(std::io::BufReader::with_capacity(128 * 1024, file))
         .with_guessed_format()?;
     let mut decoder = reader.into_decoder()?;
+    let mut icc_profile = decoder.icc_profile().ok().flatten();
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
+
+    if icc_profile.is_none() {
+        icc_profile = extract_icc_from_file(path);
+    }
+
+    if let Some(ref icc) = icc_profile {
+        apply_icc_profile_to_srgb(&mut img, icc);
+    }
+
     Ok(img)
+}
+
+fn extract_icc_from_file(path: &Path) -> Option<Vec<u8>> {
+    let data = fs::read(path).ok()?;
+    if data.len() < 4 {
+        return None;
+    }
+    // Check for JPEG SOI (0xFF, 0xD8)
+    if data[0] == 0xFF && data[1] == 0xD8 {
+        let mut chunks: Vec<(u8, Vec<u8>)> = Vec::new();
+        let mut pos = 2;
+        while pos + 4 < data.len() {
+            if data[pos] != 0xFF {
+                pos += 1;
+                continue;
+            }
+            let marker = data[pos + 1];
+            if marker == 0xDA || marker == 0xD9 {
+                break;
+            }
+            let len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+            if pos + 2 + len > data.len() {
+                break;
+            }
+            if marker == 0xE2 && len > 14 {
+                let payload = &data[pos + 4..pos + 2 + len];
+                if payload.starts_with(b"ICC_PROFILE\0") {
+                    let seq_no = payload[12];
+                    let chunk_data = payload[14..].to_vec();
+                    chunks.push((seq_no, chunk_data));
+                }
+            }
+            pos += 2 + len;
+        }
+        if !chunks.is_empty() {
+            chunks.sort_by_key(|c| c.0);
+            let mut full_icc = Vec::new();
+            for (_, chunk) in chunks {
+                full_icc.extend_from_slice(&chunk);
+            }
+            if !full_icc.is_empty() {
+                return Some(full_icc);
+            }
+        }
+    }
+    None
+}
+
+fn apply_icc_profile_to_srgb(img: &mut DynamicImage, icc_data: &[u8]) {
+    use qcms::{DataType, Intent, Profile, Transform};
+
+    let in_profile = match Profile::new_from_slice(icc_data, false) {
+        Some(p) => p,
+        None => return,
+    };
+    let srgb_profile = Profile::new_sRGB();
+
+    match img {
+        DynamicImage::ImageRgb8(rgb) => {
+            if let Some(transform) = Transform::new(
+                &in_profile,
+                &srgb_profile,
+                DataType::RGB8,
+                Intent::default(),
+            ) {
+                transform.apply(rgb.as_mut());
+            }
+        }
+        DynamicImage::ImageRgba8(rgba) => {
+            if let Some(transform) = Transform::new(
+                &in_profile,
+                &srgb_profile,
+                DataType::RGBA8,
+                Intent::default(),
+            ) {
+                transform.apply(rgba.as_mut());
+            }
+        }
+        _ => {
+            if img.color().has_alpha() {
+                let mut rgba = img.to_rgba8();
+                if let Some(transform) = Transform::new(
+                    &in_profile,
+                    &srgb_profile,
+                    DataType::RGBA8,
+                    Intent::default(),
+                ) {
+                    transform.apply(rgba.as_mut());
+                    *img = DynamicImage::ImageRgba8(rgba);
+                }
+            } else {
+                let mut rgb = img.to_rgb8();
+                if let Some(transform) = Transform::new(
+                    &in_profile,
+                    &srgb_profile,
+                    DataType::RGB8,
+                    Intent::default(),
+                ) {
+                    transform.apply(rgb.as_mut());
+                    *img = DynamicImage::ImageRgb8(rgb);
+                }
+            }
+        }
+    }
 }
 
 fn encode_image(image: &DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>> {
@@ -799,6 +913,34 @@ mod tests {
                 target_kb,
                 res
             );
+        }
+    }
+
+    #[test]
+    fn test_all_bug_images() {
+        let bug_dir = Path::new(r"D:\project\Project Code Rapi\SLIMORA\bug\warna berubah");
+        if !bug_dir.exists() {
+            return;
+        }
+        let samples = ["PRIA.jpg", "WANITA.jpg", "COVER DEPAN.jpg", "COVER BELAKANG.jpg", "FOTO AWAL.jpg"];
+        for sample_name in samples {
+            let sample = bug_dir.join(sample_name);
+            if !sample.exists() {
+                continue;
+            }
+            let img = decode_image(&sample).expect("decode_image should succeed");
+            println!("Decoded {}: {}x{}, color: {:?}", sample_name, img.width(), img.height(), img.color());
+            
+            let opts = ProcessOptions {
+                output_format: OutputFormat::Webp,
+                max_kb: 180,
+                quality: 85,
+                max_width: 1024,
+                custom_output: None,
+                filename_prefix: String::new(),
+            };
+            let (res, item) = process_one(&sample, BatchMode::Files, None, &opts).expect("process_one should succeed");
+            println!("Processed {}: {} -> {} KB", sample_name, res, item.output_size_bytes as f64 / 1024.0);
         }
     }
 }

@@ -28,6 +28,18 @@ fn pick_folder() -> Option<String> {
 }
 
 #[tauri::command]
+fn resolve_folder_path(path: String) -> Option<String> {
+    let p = std::path::Path::new(&path);
+    if p.is_dir() {
+        Some(p.to_string_lossy().to_string())
+    } else if p.is_file() {
+        p.parent().map(|parent| parent.to_string_lossy().to_string())
+    } else {
+        Some(path)
+    }
+}
+
+#[tauri::command]
 async fn process_images(
     app: tauri::AppHandle,
     input: Vec<String>,
@@ -114,9 +126,11 @@ fn open_folder(path: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             pick_files,
             pick_folder,
+            resolve_folder_path,
             process_images,
             copy_named_folders,
             stop_process,

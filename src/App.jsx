@@ -1,30 +1,250 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { NavIcon, InfoIcon } from './Icons';
+import {
+  NavIcon,
+  InfoIcon,
+  SolarGallerySendIcon,
+  SolarGalleryWideIcon,
+  SolarSettingsIcon,
+  SolarTuningIcon,
+  SolarPlayIcon,
+  SolarTrashIcon,
+  SolarHistoryIcon,
+  SolarAddFolderIcon,
+  SolarTagIcon,
+  UpdateCircleIcon,
+  ChevronRightIcon,
+} from './Icons';
+import { check } from '@tauri-apps/plugin-updater';
 import StripeProgress from './StripeProgress';
 import './App.css';
 
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
 export default function App() {
   const [page, setPage] = useState('file'); // 'file' | 'single' | 'multiple' | 'copy'
+
+  // Independent inputs per tab menu
   const [files, setFiles] = useState([]);
-  const [inputFolder, setInputFolder] = useState('');
+  const [singleFolder, setSingleFolder] = useState('');
+  const [multipleFolder, setMultipleFolder] = useState('');
+
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [outputFolder, setOutputFolder] = useState('');
   const [customOutput, setCustomOutput] = useState(false);
   const [format, setFormat] = useState('jpeg');
   const [maxKb, setMaxKb] = useState('180');
   const [quality, setQuality] = useState(85);
   const [prefix, setPrefix] = useState('');
+  const [showPrefixModal, setShowPrefixModal] = useState(false);
+  const [showNewsModal, setShowNewsModal] = useState(false);
+
+  // Real updater state (manual trigger only, hidden by default)
+  const [updateStatus, setUpdateStatus] = useState('idle'); // 'idle' | 'checking' | 'available' | 'upToDate' | 'error'
+  const [updateInfo, setUpdateInfo] = useState(null); // stores the real Update object from Tauri Updater
+  const [updateFeedback, setUpdateFeedback] = useState(null); // { type: 'success' | 'error' | 'info', message: string }
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null); // { percent: 0, downloaded: 0, total: 0 }
+  const [downloadError, setDownloadError] = useState(null);
+  const [downloadFinished, setDownloadFinished] = useState(false);
+
+  const [hasReadNews, setHasReadNews] = useState(() => {
+    try {
+      return localStorage.getItem('slimora_news_read_v2.0.1') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const prefixInputRef = useRef(null);
+
+  const handleOpenNews = () => {
+    setShowNewsModal(true);
+    if (!hasReadNews) {
+      setHasReadNews(true);
+      try {
+        localStorage.setItem('slimora_news_read_v2.0.1', 'true');
+      } catch (e) {
+        // ignore
+      }
+    }
+  };
+
+  const handleCloseNews = () => {
+    setShowNewsModal(false);
+  };
+
+  const handleCheckUpdate = async () => {
+    if (updateStatus === 'checking') return;
+    setUpdateStatus('checking');
+    setUpdateFeedback(null);
+
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateInfo(update);
+        setUpdateStatus('available');
+        setUpdateFeedback({
+          type: 'info',
+          message: `Versi baru v${update.version} ditemukan. Klik kartu untuk melihat detail.`,
+        });
+      } else {
+        setUpdateStatus('upToDate');
+        setUpdateInfo(null);
+        setUpdateFeedback({
+          type: 'success',
+          message: 'Slimora sudah versi terbaru (v2.0.1).',
+        });
+        setTimeout(() => {
+          setUpdateFeedback((prev) => (prev?.type === 'success' ? null : prev));
+        }, 4500);
+      }
+    } catch (err) {
+      console.error('Pemeriksaan pembaruan gagal:', err);
+      setUpdateStatus('error');
+      setUpdateInfo(null);
+      const errMsg = err?.message || String(err);
+      let userMsg = errMsg;
+      if (errMsg.includes('404') || errMsg.includes('Not Found')) {
+        userMsg = 'Belum ada rilis versi baru di server (404).';
+      } else if (errMsg.includes('pubkey') || errMsg.includes('signature')) {
+        userMsg = 'Verifikasi tanda tangan gagal atau belum dikonfigurasi.';
+      } else if (errMsg.includes('network') || errMsg.includes('connection') || errMsg.includes('dns')) {
+        userMsg = 'Koneksi internet bermasalah. Periksa jaringan Anda.';
+      }
+      setUpdateFeedback({
+        type: 'error',
+        message: `Gagal memeriksa: ${userMsg}`,
+      });
+    }
+  };
+
+  const handleOpenUpdateModal = () => {
+    if (updateStatus === 'available' && updateInfo) {
+      setShowUpdateModal(true);
+      setDownloadError(null);
+    }
+  };
+
+  const handleCloseUpdateModal = () => {
+    if (!isDownloading) {
+      setShowUpdateModal(false);
+      setDownloadError(null);
+    }
+  };
+
+  const handleStartDownloadAndInstall = async () => {
+    if (!updateInfo || isDownloading) return;
+    setIsDownloading(true);
+    setDownloadError(null);
+    setDownloadFinished(false);
+    setDownloadProgress({ percent: 0, downloaded: 0, total: 0 });
+
+    let downloadedBytes = 0;
+    let totalBytes = 0;
+
+    try {
+      await updateInfo.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          totalBytes = event.data.contentLength || 0;
+          setDownloadProgress({ percent: 0, downloaded: 0, total: totalBytes });
+        } else if (event.event === 'Progress') {
+          downloadedBytes += event.data.chunkLength;
+          const percent = totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
+          setDownloadProgress({ percent, downloaded: downloadedBytes, total: totalBytes });
+        } else if (event.event === 'Finished') {
+          setDownloadProgress({ percent: 100, downloaded: totalBytes, total: totalBytes });
+          setDownloadFinished(true);
+        }
+      });
+    } catch (err) {
+      console.error('Download dan instalasi update gagal:', err);
+      setDownloadError(err?.message || String(err));
+      setIsDownloading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showPrefixModal) {
+      const timer = setTimeout(() => {
+        if (prefixInputRef.current) {
+          prefixInputRef.current.focus();
+          prefixInputRef.current.select();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [showPrefixModal]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showNewsModal) setShowNewsModal(false);
+        if (showPrefixModal) setShowPrefixModal(false);
+        if (showUpdateModal && !isDownloading) {
+          setShowUpdateModal(false);
+          setDownloadError(null);
+        }
+      }
+    };
+    if (showPrefixModal || showNewsModal || showUpdateModal) {
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [showPrefixModal, showNewsModal, showUpdateModal, isDownloading]);
   const [folderNames, setFolderNames] = useState('');
   const [copySource, setCopySource] = useState('');
   const [copyDestination, setCopyDestination] = useState('');
-  const [logs, setLogs] = useState([]);
-  const [processedItems, setProcessedItems] = useState([]);
-  const [outputDir, setOutputDir] = useState('');
+
+  // Independent logs, results, output directories, and progress per tab menu
+  const [tabLogs, setTabLogs] = useState({
+    file: [],
+    single: [],
+    multiple: [],
+    copy: [],
+  });
+  const [tabProcessedItems, setTabProcessedItems] = useState({
+    file: [],
+    single: [],
+    multiple: [],
+    copy: [],
+  });
+  const [tabOutputDir, setTabOutputDir] = useState({
+    file: '',
+    single: '',
+    multiple: '',
+    copy: '',
+  });
+  const [tabProgress, setTabProgress] = useState({
+    file: 0,
+    single: 0,
+    multiple: 0,
+    copy: 0,
+  });
+
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [progress, setProgress] = useState(0);
+
+  // References for active and background tasks
+  const pageRef = useRef(page);
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
+  const processingTabRef = useRef('file');
+
+  // Active tab derived state
+  const logs = tabLogs[page] || [];
+  const processedItems = tabProcessedItems[page] || [];
+  const outputDir = tabOutputDir[page] || '';
+  const progress = tabProgress[page] || 0;
 
   // Listen for real-time progress updates from backend
   useEffect(() => {
@@ -37,17 +257,21 @@ export default function App() {
           if (!active) return;
           if (event && event.payload) {
             const { percentage, line, item, outputDir: outDir } = event.payload;
+            const target = processingTabRef.current || pageRef.current || 'file';
             if (typeof percentage === 'number') {
-              setProgress(percentage);
+              setTabProgress((prev) => ({ ...prev, [target]: percentage }));
             }
             if (line) {
-              addLog(line);
+              addLog(line, target);
             }
             if (item) {
-              setProcessedItems((prev) => [...prev, item]);
+              setTabProcessedItems((prev) => ({
+                ...prev,
+                [target]: [...(prev[target] || []), item],
+              }));
             }
             if (outDir) {
-              setOutputDir(outDir);
+              setTabOutputDir((prev) => ({ ...prev, [target]: outDir }));
             }
           }
         });
@@ -64,22 +288,31 @@ export default function App() {
     };
   }, []);
 
-  const addLog = (text) => {
-    setLogs((prev) => [...prev, text]);
+  const addLog = (text, targetPage = pageRef.current) => {
+    setTabLogs((prev) => ({
+      ...prev,
+      [targetPage]: [...(prev[targetPage] || []), text],
+    }));
   };
 
   const handleClearLogs = () => {
-    setLogs([]);
-    setProcessedItems([]);
-    setOutputDir('');
+    setTabLogs((prev) => ({ ...prev, [page]: [] }));
+    setTabProcessedItems((prev) => ({ ...prev, [page]: [] }));
+    setTabOutputDir((prev) => ({ ...prev, [page]: '' }));
+    setTabProgress((prev) => ({ ...prev, [page]: 0 }));
   };
 
   // Drag & drop support via Tauri WebView event
   useEffect(() => {
     let unlisten;
     try {
-      getCurrentWebview().onDragDropEvent((event) => {
-        if (event.payload.type === 'drop') {
+      getCurrentWebview().onDragDropEvent(async (event) => {
+        if (event.payload.type === 'enter' || event.payload.type === 'over') {
+          setIsDraggingOver(true);
+        } else if (event.payload.type === 'leave') {
+          setIsDraggingOver(false);
+        } else if (event.payload.type === 'drop') {
+          setIsDraggingOver(false);
           const dropped = event.payload.paths || [];
           if (dropped.length > 0) {
             if (page === 'file') {
@@ -90,13 +323,61 @@ export default function App() {
               });
               if (filtered.length > 0) {
                 setFiles(filtered);
-                setProgress(0);
-                addLog(`Dropped ${filtered.length} new image(s)`);
+                setTabProgress((prev) => ({ ...prev, file: 0 }));
+                addLog(`Dropped ${filtered.length} new image(s)`, 'file');
               }
-            } else if (page !== 'copy') {
-              setInputFolder(dropped[0]);
-              setProgress(0);
-              addLog(`Source folder selected: ${dropped[0]}`);
+            } else if (page === 'single') {
+              let targetPath = dropped[0];
+              try {
+                const resolved = await invoke('resolve_folder_path', { path: targetPath });
+                if (resolved) targetPath = resolved;
+              } catch {
+                const imgExts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'heic', 'heif'];
+                const seg = targetPath.split(/[\\/]/).pop() || '';
+                const ext = seg.includes('.') ? seg.split('.').pop()?.toLowerCase() : null;
+                if (ext && imgExts.includes(ext)) {
+                  const parent = targetPath.substring(0, Math.max(targetPath.lastIndexOf('\\'), targetPath.lastIndexOf('/')));
+                  if (parent) targetPath = parent;
+                }
+              }
+              setSingleFolder(targetPath);
+              setTabProgress((prev) => ({ ...prev, single: 0 }));
+              addLog(`Single folder selected: ${targetPath}`, 'single');
+            } else if (page === 'multiple') {
+              let targetPath = dropped[0];
+              try {
+                const resolved = await invoke('resolve_folder_path', { path: targetPath });
+                if (resolved) targetPath = resolved;
+              } catch {
+                const imgExts = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'heic', 'heif'];
+                const seg = targetPath.split(/[\\/]/).pop() || '';
+                const ext = seg.includes('.') ? seg.split('.').pop()?.toLowerCase() : null;
+                if (ext && imgExts.includes(ext)) {
+                  const parent = targetPath.substring(0, Math.max(targetPath.lastIndexOf('\\'), targetPath.lastIndexOf('/')));
+                  if (parent) targetPath = parent;
+                }
+              }
+              setMultipleFolder(targetPath);
+              setTabProgress((prev) => ({ ...prev, multiple: 0 }));
+              addLog(`Multiple folder root selected: ${targetPath}`, 'multiple');
+            } else if (page === 'copy') {
+              let targetPath = dropped[0];
+              try {
+                const resolved = await invoke('resolve_folder_path', { path: targetPath });
+                if (resolved) targetPath = resolved;
+              } catch {
+                // fallback
+              }
+              if (!copySource) {
+                setCopySource(targetPath);
+                addLog(`Source folder selected: ${targetPath}`, 'copy');
+              } else if (!copyDestination) {
+                setCopyDestination(targetPath);
+                addLog(`Destination folder selected: ${targetPath}`, 'copy');
+              } else {
+                setCopySource(targetPath);
+                addLog(`Source folder updated: ${targetPath}`, 'copy');
+              }
             }
           }
         }
@@ -118,23 +399,37 @@ export default function App() {
       const selected = await invoke('pick_files');
       if (selected && selected.length > 0) {
         setFiles(selected);
-        setProgress(0);
-        addLog(`Selected ${selected.length} image(s)`);
+        setTabProgress((prev) => ({ ...prev, file: 0 }));
+        addLog(`Selected ${selected.length} image(s)`, 'file');
       }
     } catch (err) {
-      addLog(`File pick error: ${err}`);
+      addLog(`File pick error: ${err}`, 'file');
     }
   };
 
-  const handlePickInputFolder = async () => {
+  const handlePickSingleFolder = async () => {
     try {
       const folder = await invoke('pick_folder');
       if (folder) {
-        setInputFolder(folder);
-        addLog(`Source folder set: ${folder}`);
+        setSingleFolder(folder);
+        setTabProgress((prev) => ({ ...prev, single: 0 }));
+        addLog(`Single folder set: ${folder}`, 'single');
       }
     } catch (err) {
-      addLog(`Folder pick error: ${err}`);
+      addLog(`Folder pick error: ${err}`, 'single');
+    }
+  };
+
+  const handlePickMultipleFolder = async () => {
+    try {
+      const folder = await invoke('pick_folder');
+      if (folder) {
+        setMultipleFolder(folder);
+        setTabProgress((prev) => ({ ...prev, multiple: 0 }));
+        addLog(`Multiple folder root set: ${folder}`, 'multiple');
+      }
+    } catch (err) {
+      addLog(`Folder pick error: ${err}`, 'multiple');
     }
   };
 
@@ -143,10 +438,10 @@ export default function App() {
       const folder = await invoke('pick_folder');
       if (folder) {
         setOutputFolder(folder);
-        addLog(`Output folder set: ${folder}`);
+        addLog(`Output folder set: ${folder}`, page);
       }
     } catch (err) {
-      addLog(`Folder pick error: ${err}`);
+      addLog(`Folder pick error: ${err}`, page);
     }
   };
 
@@ -155,7 +450,7 @@ export default function App() {
       const folder = await invoke('pick_folder');
       if (folder) setCopySource(folder);
     } catch (err) {
-      addLog(`Source pick error: ${err}`);
+      addLog(`Source pick error: ${err}`, 'copy');
     }
   };
 
@@ -164,17 +459,18 @@ export default function App() {
       const folder = await invoke('pick_folder');
       if (folder) setCopyDestination(folder);
     } catch (err) {
-      addLog(`Destination pick error: ${err}`);
+      addLog(`Destination pick error: ${err}`, 'copy');
     }
   };
 
   // Execution
   const handleStart = async () => {
     if (busy) return;
+    processingTabRef.current = page;
 
     if (page === 'copy') {
       if (!copySource || !copyDestination) {
-        addLog('Error: Choose source and destination folders.');
+        addLog('Error: Choose source and destination folders.', 'copy');
         return;
       }
       const names = folderNames
@@ -183,22 +479,25 @@ export default function App() {
         .filter(Boolean);
 
       if (names.length === 0) {
-        addLog('Error: Enter folder names, one per line.');
+        addLog('Error: Enter folder names, one per line.', 'copy');
         return;
       }
 
       setBusy(true);
-      setProgress(0);
+      setTabProgress((prev) => ({ ...prev, copy: 0 }));
       try {
         const summary = await invoke('copy_named_folders', {
           names,
           source: copySource,
           destination: copyDestination,
         });
-        setProgress(100);
-        addLog(`Finished: ${summary.completed} copied, ${summary.failed} failed`);
+        setTabProgress((prev) => ({ ...prev, copy: 100 }));
+        if (summary.outputDir) {
+          setTabOutputDir((prev) => ({ ...prev, copy: summary.outputDir }));
+        }
+        addLog(`Finished: ${summary.completed} copied, ${summary.failed} failed`, 'copy');
       } catch (err) {
-        addLog(`Copy error: ${err}`);
+        addLog(`Copy error: ${err}`, 'copy');
       } finally {
         setBusy(false);
         setStopping(false);
@@ -208,17 +507,34 @@ export default function App() {
 
     // Compression modes
     const mode = page === 'multiple' ? 'multiplefolders' : page === 'single' ? 'singlefolder' : 'files';
-    const input = mode === 'files' ? files : inputFolder ? [inputFolder] : [];
+    const currentFolder = page === 'single' ? singleFolder : page === 'multiple' ? multipleFolder : '';
+    const input = mode === 'files' ? files : currentFolder ? [currentFolder] : [];
 
     if (input.length === 0) {
-      addLog('Error: Choose image files or a source folder.');
+      addLog(page === 'file' ? 'Error: Choose image files.' : 'Error: Choose a source folder.', page);
       return;
     }
 
     if (customOutput && !outputFolder) {
-      addLog('Error: Choose a target output folder or turn off the option.');
+      addLog('Error: Choose a target output folder or turn off the option.', page);
       return;
     }
+
+    // On file tab, open prefix modal popup so user is always reminded to configure prefix
+    if (page === 'file') {
+      setShowPrefixModal(true);
+      return;
+    }
+
+    await executeCompression(prefix);
+  };
+
+  const executeCompression = async (prefixToUse = prefix) => {
+    const mode = page === 'multiple' ? 'multiplefolders' : page === 'single' ? 'singlefolder' : 'files';
+    const currentFolder = page === 'single' ? singleFolder : page === 'multiple' ? multipleFolder : '';
+    const input = mode === 'files' ? files : currentFolder ? [currentFolder] : [];
+
+    const cleanPrefix = page === 'file' ? (prefixToUse || '').trim().replace(/_+$/, '') : '';
 
     const options = {
       outputFormat: format,
@@ -226,43 +542,55 @@ export default function App() {
       quality: quality,
       maxWidth: 1024,
       customOutput: customOutput && outputFolder ? outputFolder : null,
-      filenamePrefix: prefix.trim(),
+      filenamePrefix: cleanPrefix,
     };
 
     setBusy(true);
-    setProgress(0);
-    setProcessedItems([]);
+    setTabProgress((prev) => ({ ...prev, [page]: 0 }));
+    setTabProcessedItems((prev) => ({ ...prev, [page]: [] }));
     try {
       const summary = await invoke('process_images', {
         input,
         mode,
-        root: inputFolder || null,
+        root: currentFolder || null,
         options,
       });
-      setProgress(100);
+      setTabProgress((prev) => ({ ...prev, [page]: 100 }));
       if (summary.items && summary.items.length > 0) {
-        setProcessedItems(summary.items);
+        setTabProcessedItems((prev) => ({ ...prev, [page]: summary.items }));
       }
       if (summary.outputDir) {
-        setOutputDir(summary.outputDir);
+        setTabOutputDir((prev) => ({ ...prev, [page]: summary.outputDir }));
       }
-      addLog(`Finished: ${summary.completed} completed, ${summary.failed} failed`);
+      addLog(`Finished: ${summary.completed} completed, ${summary.failed} failed`, page);
     } catch (err) {
-      addLog(`Process error: ${err}`);
+      addLog(`Process error: ${err}`, page);
     } finally {
       setBusy(false);
       setStopping(false);
     }
   };
 
+  const handleConfirmPrefix = (prefixValue) => {
+    setShowPrefixModal(false);
+    setPrefix(prefixValue);
+    executeCompression(prefixValue);
+  };
+
+  const handleSkipPrefix = () => {
+    setShowPrefixModal(false);
+    setPrefix('');
+    executeCompression('');
+  };
+
   const handleStop = async () => {
     if (stopping) return;
     setStopping(true);
-    addLog('⏹ Stopping process... finishing current file');
+    addLog('⏹ Stopping process... finishing current file', processingTabRef.current || page);
     try {
       await invoke('stop_process');
     } catch (err) {
-      addLog(`Stop error: ${err}`);
+      addLog(`Stop error: ${err}`, processingTabRef.current || page);
     }
   };
 
@@ -292,26 +620,37 @@ export default function App() {
         ? copyDestination
         : (customOutput && outputFolder
             ? outputFolder
-            : (inputFolder
-                ? `${inputFolder}\\reduced`
-                : (files.length > 0 && files[0]
-                    ? `${files[0].substring(0, Math.max(files[0].lastIndexOf('\\'), files[0].lastIndexOf('/')))}\\reduced`
-                    : '')))
+            : (page === 'single' && singleFolder
+                ? `${singleFolder}\\reduced`
+                : (page === 'multiple' && multipleFolder
+                    ? `${multipleFolder}\\reduced`
+                    : (page === 'file' && files.length > 0 && files[0]
+                        ? `${files[0].substring(0, Math.max(files[0].lastIndexOf('\\'), files[0].lastIndexOf('/')))}\\reduced`
+                        : ''))))
     );
 
     return (
       <div className="panel activity-panel">
         <div className="activity-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="panel-header">› Log Aktivitas</span>
+            <span className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <SolarHistoryIcon width={19} height={19} fill="#0c1f46" />
+              <span>Log Aktivitas</span>
+            </span>
             {processedItems.length > 0 && (
               <span className="activity-count-badge">
                 {processedItems.length} berkas
               </span>
             )}
           </div>
-          <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} onClick={handleClearLogs}>
-            Clear
+          <button
+            type="button"
+            className="btn-clear-log"
+            onClick={handleClearLogs}
+            title="Bersihkan log aktivitas"
+          >
+            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+            <span>Clear</span>
           </button>
         </div>
 
@@ -344,12 +683,11 @@ export default function App() {
             <table className="activity-table">
               <thead>
                 <tr>
-                  <th style={{ minWidth: '100px' }} title="Nama berkas asli">File Ori</th>
-                  <th style={{ minWidth: '110px' }} title="Nama berkas output">Output</th>
-                  <th style={{ minWidth: '75px' }} title="Ukuran berkas asli">Size Ori</th>
-                  <th style={{ minWidth: '85px' }} title="Ukuran setelah downscale">Size Akhir</th>
-                  <th style={{ minWidth: '95px' }} title="Persentase penurunan & rasio hemat">Hemat</th>
-                  <th style={{ minWidth: '105px' }} title="Resolusi pixel akhir (lebar × tinggi)">Resolusi</th>
+                  <th style={{ minWidth: '95px' }} title="Nama berkas asli">File Ori</th>
+                  <th style={{ width: '68px', minWidth: '60px', textAlign: 'center' }} title="Format target output">Output</th>
+                  <th style={{ width: '75px', minWidth: '70px', textAlign: 'right' }} title="Ukuran berkas asli">Size Ori</th>
+                  <th style={{ width: '85px', minWidth: '80px', textAlign: 'right' }} title="Ukuran setelah downscale">Size Akhir</th>
+                  <th style={{ width: '90px', minWidth: '85px', textAlign: 'center' }} title="Persentase penurunan & rasio hemat">Hemat</th>
                 </tr>
               </thead>
               <tbody>
@@ -363,34 +701,22 @@ export default function App() {
                       <td className="cell-orig-name" title={item.originalName}>
                         <span className="file-name-text">{item.originalName}</span>
                       </td>
-                      <td className="cell-output-name" title={item.outputName}>
-                        <div className="cell-output-wrap">
-                          <span className={`ext-tag ${getFormatBadgeClass(ext)}`}>.{ext}</span>
-                          <span className="file-name-text">{item.outputName}</span>
-                        </div>
+                      <td className="cell-output-format" style={{ textAlign: 'center' }} title={`Format output: .${ext}`}>
+                        <span className={`ext-tag ${getFormatBadgeClass(ext)}`}>.{ext}</span>
                       </td>
-                      <td className="cell-size-orig">
+                      <td className="cell-size-orig" style={{ textAlign: 'right' }}>
                         <span className="size-badge-orig">{formatBytes(item.originalSizeBytes)}</span>
                       </td>
-                      <td className="cell-size-output">
+                      <td className="cell-size-output" style={{ textAlign: 'right' }}>
                         <span className="size-badge-downscale">{formatBytes(item.outputSizeBytes)}</span>
                       </td>
-                      <td className="cell-reduction">
+                      <td className="cell-reduction" style={{ textAlign: 'center' }}>
                         <div className="reduction-cell">
                           <span className={`reduction-pill ${item.reductionPercent >= 0 ? 'pill-positive' : 'pill-negative'}`}>
                             {item.reductionPercent >= 0 ? `↓ ${item.reductionPercent.toFixed(1)}%` : `+${Math.abs(item.reductionPercent).toFixed(1)}%`}
                           </span>
                           {ratio && <span className="reduction-ratio">{ratio}x</span>}
                         </div>
-                      </td>
-                      <td className="cell-dimensions">
-                        {item.finalWidth > 0 ? (
-                          <span className="dimensions-pill">
-                            {item.finalWidth} × {item.finalHeight} px
-                          </span>
-                        ) : (
-                          <span className="dimensions-empty">-</span>
-                        )}
                       </td>
                     </tr>
                   );
@@ -405,11 +731,7 @@ export default function App() {
             </div>
           ) : (
             <div className="activity-empty-state">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.6">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
+              <SolarGalleryWideIcon width={36} height={36} fill="#94a3b8" />
               <span>Belum ada aktivitas pemrosesan</span>
               <small>Klik tombol START untuk mulai memproses gambar</small>
             </div>
@@ -464,11 +786,74 @@ export default function App() {
         </nav>
 
         <div className="sidebar-footer">
+          {updateStatus === 'available' && updateInfo && (
+            <button
+              type="button"
+              className="update-indicator-btn"
+              onClick={handleOpenUpdateModal}
+              title={`Pembaruan Slimora v${updateInfo.version} tersedia. Klik untuk melihat detail.`}
+            >
+              <div className="update-indicator-left">
+                <UpdateCircleIcon size={26} />
+                <div className="update-text-col">
+                  <span className="update-title">Versi {updateInfo.version} tersedia</span>
+                  <span className="update-subtitle">Perbarui Slimora sekarang</span>
+                </div>
+              </div>
+              <ChevronRightIcon width={14} height={14} className="update-chevron" />
+            </button>
+          )}
+
           <div className="sidebar-divider" />
+
           <div className="version-info">
-            <InfoIcon />
-            <span>Version 2.0.1</span>
+            <button
+              type="button"
+              className={`version-check-btn ${updateStatus === 'checking' ? 'is-checking' : ''}`}
+              onClick={handleCheckUpdate}
+              disabled={updateStatus === 'checking'}
+              title={
+                updateStatus === 'checking'
+                  ? 'Sedang memeriksa pembaruan...'
+                  : 'Klik untuk periksa pembaruan Slimora'
+              }
+            >
+              <InfoIcon />
+              <span className="version-text">Version 2.0.1</span>
+              {updateStatus === 'checking' ? (
+                <span className="version-checking-spinner" />
+              ) : (
+                <span className="version-check-badge">Cek Update</span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className={`version-news-btn ${!hasReadNews ? 'has-unread' : ''}`}
+              onClick={handleOpenNews}
+              title="Lihat Update News v2.0.1"
+            >
+              {!hasReadNews && <span className="news-red-dot" />}
+              <span className="news-btn-text">NEWS</span>
+            </button>
           </div>
+
+          {updateFeedback && (
+            <div className={`update-feedback-toast ${updateFeedback.type}`}>
+              <span className="update-feedback-icon">
+                {updateFeedback.type === 'success' ? '✓' : updateFeedback.type === 'error' ? '⚠️' : 'ℹ️'}
+              </span>
+              <span className="update-feedback-text">{updateFeedback.message}</span>
+              <button
+                type="button"
+                className="update-feedback-dismiss"
+                onClick={() => setUpdateFeedback(null)}
+                title="Tutup notifikasi"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -487,28 +872,28 @@ export default function App() {
             /* COPY MODE */
             <>
               <div className="body-left">
-                <div className="panel" style={{ flex: 1, gap: 14 }}>
-                  <div className="field-group">
-                    <label className="field-label">Folder names</label>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Enter one folder name per line</span>
-                    <textarea
-                      rows={5}
-                      className="input-text"
-                      placeholder="Folder A, Folder B..."
-                      value={folderNames}
-                      onChange={(e) => setFolderNames(e.target.value)}
-                      style={{ resize: 'vertical' }}
-                    />
-                  </div>
-
+                <div className="panel copy-panel">
                   <div className="picker-row">
                     <div className="picker-info">
                       <span className="picker-label">Source folder</span>
                       <span className="picker-path">{copySource || 'Not selected'}</span>
                     </div>
-                    <button className="btn-secondary" onClick={handlePickCopySource}>
-                      Browse
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {copySource && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ padding: '6px 8px', borderColor: '#fecaca', color: '#dc2626' }}
+                          onClick={() => setCopySource('')}
+                          title="Clear source folder"
+                        >
+                          <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                        </button>
+                      )}
+                      <button className="btn-secondary" onClick={handlePickCopySource}>
+                        Browse
+                      </button>
+                    </div>
                   </div>
 
                   <div className="picker-row">
@@ -516,9 +901,59 @@ export default function App() {
                       <span className="picker-label">Destination folder</span>
                       <span className="picker-path">{copyDestination || 'Not selected'}</span>
                     </div>
-                    <button className="btn-secondary" onClick={handlePickCopyDestination}>
-                      Browse
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {copyDestination && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          style={{ padding: '6px 8px', borderColor: '#fecaca', color: '#dc2626' }}
+                          onClick={() => setCopyDestination('')}
+                          title="Clear destination folder"
+                        >
+                          <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                        </button>
+                      )}
+                      <button className="btn-secondary" onClick={handlePickCopyDestination}>
+                        Browse
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="field-group copy-input-group">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label className="field-label">Folder names</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>1 folder name per line</span>
+                        {folderNames && (
+                          <button
+                            type="button"
+                            style={{
+                              padding: '2px 7px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              border: '1px solid #fecaca',
+                              borderRadius: 4,
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                            }}
+                            onClick={() => setFolderNames('')}
+                          >
+                            <SolarTrashIcon width={11} height={11} fill="#dc2626" />
+                            <span>Clear</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <textarea
+                      className="copy-names-textarea"
+                      placeholder="Folder A&#10;Folder B&#10;Folder C..."
+                      value={folderNames}
+                      onChange={(e) => setFolderNames(e.target.value)}
+                    />
                   </div>
                 </div>
               </div>
@@ -533,13 +968,28 @@ export default function App() {
               <div className="body-left">
                 {page === 'file' ? (
                   <div className="panel" style={{ gap: 12 }}>
-                    <div className="dropzone" onClick={handlePickFiles}>
-                      <span className="drop-icon">⇧</span>
+                    <div
+                      className={`dropzone ${isDraggingOver ? 'dragover' : ''}`}
+                      onClick={handlePickFiles}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+                    >
+                      <span className="drop-icon">
+                        <SolarGallerySendIcon width={38} height={38} fill="#0077ff" />
+                      </span>
                       <span className="drop-title">
                         {files.length === 0 ? 'Drop images here or browse' : `${files.length} files selected`}
                       </span>
                       <span className="drop-hint">JPG · PNG · WebP · AVIF · HEIC</span>
-                      <button className="btn-secondary" style={{ marginTop: 4 }}>
+                      <button
+                        className="btn-secondary"
+                        style={{ marginTop: 4 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePickFiles();
+                        }}
+                      >
                         Browse files
                       </button>
                     </div>
@@ -553,7 +1003,7 @@ export default function App() {
                           <button
                             type="button"
                             style={{
-                              padding: '2px 8px',
+                              padding: '3px 8px',
                               fontSize: 11,
                               fontWeight: 600,
                               border: '1px solid #fecaca',
@@ -561,15 +1011,19 @@ export default function App() {
                               background: '#fef2f2',
                               color: '#dc2626',
                               cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
                             }}
                             onClick={(e) => {
                               e.stopPropagation();
                               setFiles([]);
-                              setProgress(0);
-                              addLog('Cleared file queue');
+                              setTabProgress((prev) => ({ ...prev, file: 0 }));
+                              addLog('Cleared file queue', 'file');
                             }}
                           >
-                            ✕ Clear
+                            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                            <span>Clear</span>
                           </button>
                         </div>
                         {files.slice(0, 4).map((f, i) => (
@@ -583,42 +1037,190 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : page === 'single' ? (
                   <div className="panel" style={{ gap: 12 }}>
-                    <div className="field-group">
-                      <span className="panel-header">Source folder</span>
-                      <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
-                        Images in this folder and its subfolders will be processed.
+                    <div
+                      className={`dropzone ${isDraggingOver ? 'dragover' : ''}`}
+                      onClick={handlePickSingleFolder}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+                    >
+                      <span className="drop-icon">
+                        <SolarAddFolderIcon width={38} height={38} fill="#0077ff" />
                       </span>
-                    </div>
-                    <div className="picker-row">
-                      <div className="picker-info">
-                        <span className="picker-path">{inputFolder || 'No source folder selected'}</span>
-                      </div>
-                      <button className="btn-secondary" onClick={handlePickInputFolder}>
-                        Browse source folder
+                      <span className="drop-title">
+                        {!singleFolder ? 'Drop folder here or browse' : (singleFolder.split(/[\\/]/).filter(Boolean).pop() || 'Folder selected')}
+                      </span>
+                      <span className="drop-hint">Images in folder and subfolders will be processed</span>
+                      <button
+                        className="btn-secondary"
+                        style={{ marginTop: 4 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePickSingleFolder();
+                        }}
+                      >
+                        Browse folder
                       </button>
                     </div>
+
+                    {singleFolder && (
+                      <div className="selected-files-list">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-dark)' }}>
+                            1 folder ready
+                          </span>
+                          <button
+                            type="button"
+                            style={{
+                              padding: '3px 8px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              border: '1px solid #fecaca',
+                              borderRadius: 4,
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSingleFolder('');
+                              setTabProgress((prev) => ({ ...prev, single: 0 }));
+                              addLog('Cleared single folder selection', 'single');
+                            }}
+                          >
+                            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                            <span>Clear</span>
+                          </button>
+                        </div>
+                        <div
+                          className="file-item"
+                          style={{
+                            wordBreak: 'break-all',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                          title={singleFolder}
+                        >
+                          <SolarAddFolderIcon width={14} height={14} fill="#085fd1" style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {singleFolder}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+                ) : page === 'multiple' ? (
+                  <div className="panel" style={{ gap: 12 }}>
+                    <div
+                      className={`dropzone ${isDraggingOver ? 'dragover' : ''}`}
+                      onClick={handlePickMultipleFolder}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+                    >
+                      <span className="drop-icon">
+                        <SolarAddFolderIcon width={38} height={38} fill="#0077ff" />
+                      </span>
+                      <span className="drop-title">
+                        {!multipleFolder ? 'Drop folder here or browse' : (multipleFolder.split(/[\\/]/).filter(Boolean).pop() || 'Folder selected')}
+                      </span>
+                      <span className="drop-hint">Subfolders inside this folder will be batch processed</span>
+                      <button
+                        className="btn-secondary"
+                        style={{ marginTop: 4 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePickMultipleFolder();
+                        }}
+                      >
+                        Browse folder
+                      </button>
+                    </div>
+
+                    {multipleFolder && (
+                      <div className="selected-files-list">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-dark)' }}>
+                            1 folder ready
+                          </span>
+                          <button
+                            type="button"
+                            style={{
+                              padding: '3px 8px',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              border: '1px solid #fecaca',
+                              borderRadius: 4,
+                              background: '#fef2f2',
+                              color: '#dc2626',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMultipleFolder('');
+                              setTabProgress((prev) => ({ ...prev, multiple: 0 }));
+                              addLog('Cleared multiple folder selection', 'multiple');
+                            }}
+                          >
+                            <SolarTrashIcon width={12} height={12} fill="#dc2626" />
+                            <span>Clear</span>
+                          </button>
+                        </div>
+                        <div
+                          className="file-item"
+                          style={{
+                            wordBreak: 'break-all',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                          title={multipleFolder}
+                        >
+                          <SolarAddFolderIcon width={14} height={14} fill="#085fd1" style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {multipleFolder}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
                 {renderActivityPanel()}
               </div>
 
               <div className="body-right">
                 <div className="panel settings-panel">
-                  <span className="panel-header">⚙ Output Settings</span>
+                  <span className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <SolarSettingsIcon width={19} height={19} fill="#0c1f46" />
+                    <span>Output Settings</span>
+                  </span>
 
                   <div className="field-group">
                     <label className="field-label">Format</label>
                     <div className="format-pills">
-                      {['png', 'jpeg', 'webp', 'avif'].map((fmt) => (
+                      {[
+                        { id: 'png', label: 'PNG' },
+                        { id: 'jpeg', label: 'JPEG' },
+                        { id: 'webp', label: 'WebP' },
+                        { id: 'avif', label: 'AVIF' },
+                      ].map((item) => (
                         <button
-                          key={fmt}
-                          className={`format-btn ${format === fmt ? 'active' : ''}`}
-                          onClick={() => setFormat(fmt)}
+                          key={item.id}
+                          type="button"
+                          className={`format-btn ${format === item.id ? 'active' : ''}`}
+                          onClick={() => setFormat(item.id)}
                         >
-                          {fmt.toUpperCase()}
+                          {item.label}
                         </button>
                       ))}
                     </div>
@@ -663,9 +1265,10 @@ export default function App() {
                       <span style={{ fontSize: 12.5, fontWeight: 600 }}>KB</span>
                     </div>
                     <div className="presets-row">
-                      {['50', '100', '180', '300'].map((preset) => (
+                      {['50', '150', '180', '300'].map((preset) => (
                         <button
                           key={preset}
+                          type="button"
                           className={`preset-btn ${maxKb === preset ? 'active' : ''}`}
                           onClick={() => setMaxKb(preset)}
                         >
@@ -677,15 +1280,7 @@ export default function App() {
 
                   <div className="field-group">
                     <div className="quality-header-row">
-                      <svg className="quality-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
-                        <path d="M3 7H11" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <path d="M17 7H21" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <circle cx="14" cy="7" r="2.8" fill="#ffffff" stroke="#081434" strokeWidth="2.4" />
-                        
-                        <path d="M3 17H7" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <path d="M13 17H21" stroke="#081434" strokeWidth="2.4" strokeLinecap="round" />
-                        <circle cx="10" cy="17" r="2.8" fill="#ffffff" stroke="#081434" strokeWidth="2.4" />
-                      </svg>
+                      <SolarTuningIcon width={18} height={18} fill="#081434" className="quality-icon" />
                       <label className="field-label quality-title">Quality</label>
                     </div>
                     <div className="slider-container">
@@ -703,19 +1298,6 @@ export default function App() {
                       <span className="slider-value-text">{quality}</span>
                     </div>
                   </div>
-
-                  {page === 'file' && (
-                    <div className="field-group">
-                      <label className="field-label">Filename prefix (optional)</label>
-                      <input
-                        type="text"
-                        className="input-text"
-                        placeholder="prefix_"
-                        value={prefix}
-                        onChange={(e) => setPrefix(e.target.value)}
-                      />
-                    </div>
-                  )}
                 </div>
               </div>
             </>
@@ -741,12 +1323,348 @@ export default function App() {
             <button
               className="btn-primary-action"
               onClick={handleStart}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}
             >
-              {page === 'copy' ? 'START COPY  →' : 'START  →'}
+              <span>{page === 'copy' ? 'START COPY' : 'START'}</span>
+              <SolarPlayIcon width={16} height={16} fill="#ffffff" />
             </button>
           )}
         </footer>
       </main>
+
+      {/* Prefix Modal Popup (File Tab only) */}
+      {showPrefixModal && page === 'file' && (
+        <div className="modal-overlay" onClick={() => setShowPrefixModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-header-left">
+                <div className="modal-icon-badge">
+                  <SolarTagIcon width={20} height={20} fill="#0064f4" />
+                </div>
+                <div>
+                  <h3 className="modal-title">Prefix Nama File</h3>
+                  <p className="modal-subtitle">Atur awalan nama file sebelum kompresi dimulai</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setShowPrefixModal(false)}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p className="modal-field-desc">
+                Tambahkan awalan nama untuk file hasil kompresi agar mudah dibedakan dan tidak menimpa file asli:
+              </p>
+
+              <div className="modal-input-wrap">
+                <input
+                  ref={prefixInputRef}
+                  type="text"
+                  className="modal-input-text"
+                  placeholder="Contoh: opt, web, min..."
+                  value={prefix}
+                  onChange={(e) => setPrefix(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleConfirmPrefix(prefix);
+                    }
+                  }}
+                />
+                {prefix && (
+                  <button
+                    type="button"
+                    className="modal-input-clear"
+                    onClick={() => setPrefix('')}
+                    title="Hapus prefix"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <div className="modal-preview-box">
+                <div className="modal-preview-label">
+                  <span>Preview Nama File</span>
+                  <span className="modal-preview-badge-count">{files.length} file</span>
+                </div>
+                <div className="modal-preview-flow">
+                  {(() => {
+                    const sampleFile = files[0] ? files[0].split(/[\\/]/).pop() : 'contoh_gambar.jpg';
+                    const lastDot = sampleFile.lastIndexOf('.');
+                    const sampleStem = lastDot > 0 ? sampleFile.slice(0, lastDot) : sampleFile;
+                    const previewExt = format === 'jpeg' ? 'jpg' : format;
+                    const cleanP = (prefix || '').trim().replace(/_+$/, '');
+                    return (
+                      <>
+                        <span className="modal-preview-orig" title={sampleFile}>{sampleFile}</span>
+                        <span className="modal-preview-arrow">➔</span>
+                        <span className="modal-preview-dest">
+                          {cleanP ? (
+                            <>
+                              <span className="modal-preview-prefix-highlight">{cleanP}_</span>
+                              {sampleStem}.{previewExt}
+                            </>
+                          ) : (
+                            `${sampleStem}.${previewExt}`
+                          )}
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="modal-btn-ghost"
+                onClick={handleSkipPrefix}
+              >
+                Tanpa Prefix
+              </button>
+              <div className="modal-footer-right">
+                <button
+                  type="button"
+                  className="modal-btn-cancel"
+                  onClick={() => setShowPrefixModal(false)}
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  className="modal-btn-start"
+                  onClick={() => handleConfirmPrefix(prefix)}
+                >
+                  <SolarPlayIcon width={14} height={14} fill="#ffffff" />
+                  <span>Mulai Kompresi</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update News Modal Popup */}
+      {showNewsModal && (
+        <div className="modal-overlay" onClick={handleCloseNews}>
+          <div className="modal-card news-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="news-modal-header">
+              <div>
+                <span className="news-badge-tag">✨ UPDATE v2.0.1</span>
+                <h2 className="news-modal-title">SLIMORA v2.0.1 — UPDATE NEWS</h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseNews}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="news-modal-body">
+              <div className="news-intro-box">
+                Pembaruan Slimora v2.0.1 menghadirkan sejumlah perbaikan dan fitur baru untuk meningkatkan kualitas dan kenyamanan pengolahan gambar.
+              </div>
+
+              <div className="news-items-list">
+                <div className="news-item-card">
+                  <div className="news-item-num">1</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Perbaikan Warna Gambar</h4>
+                    <p className="news-item-desc">
+                      Memperbaiki masalah perubahan warna gambar setelah proses pengolahan agar hasilnya tetap mendekati gambar asli.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="news-item-card">
+                  <div className="news-item-num">2</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Peningkatan Stabilitas Aplikasi</h4>
+                    <p className="news-item-desc">
+                      Memperbaiki masalah aplikasi yang terkadang macet atau tidak merespons saat digunakan.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="news-item-card">
+                  <div className="news-item-num">3</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Pilihan Format Output</h4>
+                    <p className="news-item-desc">
+                      Tersedia empat pilihan format hasil gambar, yaitu PNG, JPG, WebP, dan AVIF, sesuai kebutuhan pengolahan.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="news-item-card">
+                  <div className="news-item-num">4</div>
+                  <div className="news-item-content">
+                    <h4 className="news-item-title">Dukungan Format Gambar Tambahan</h4>
+                    <p className="news-item-desc">
+                      Mendukung pemrosesan gambar berformat HEIC dan WebP, sehingga lebih banyak jenis file gambar dapat diolah.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="news-summary-banner">
+                Slimora v2.0.1 — Pengolahan gambar yang lebih stabil, fleksibel, dan nyaman.
+              </div>
+            </div>
+
+            <div className="news-modal-footer">
+              <button
+                type="button"
+                className="news-modal-close-action"
+                onClick={handleCloseNews}
+              >
+                Mengerti & Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Available Modal Popup (Real Tauri Updater) */}
+      {showUpdateModal && updateInfo && (
+        <div className="modal-overlay" onClick={handleCloseUpdateModal}>
+          <div className="modal-card update-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="update-modal-header">
+              <div className="update-modal-header-left">
+                <div className="update-modal-badge-row">
+                  <span className="update-modal-badge">✨ PEMBARUAN TERSEDIA</span>
+                  <span className="update-modal-version-tag">v{updateInfo.version}</span>
+                </div>
+                <h2 className="update-modal-title">Pembaruan Slimora Tersedia</h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseUpdateModal}
+                disabled={isDownloading && !downloadError}
+                title="Tutup (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="update-modal-body">
+              {/* Version Comparison Box */}
+              <div className="update-version-card">
+                <div className="update-version-col">
+                  <span className="update-version-label">Versi Saat Ini</span>
+                  <span className="update-version-value">{updateInfo.currentVersion || '2.0.1'}</span>
+                </div>
+                <div className="update-version-arrow">➔</div>
+                <div className="update-version-col">
+                  <span className="update-version-label">Versi Terbaru</span>
+                  <div className="update-version-badge-val">
+                    <span className="update-version-value highlight">{updateInfo.version}</span>
+                    <span className="update-ready-tag">Tersedia</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Download & Installation Progress Box */}
+              {isDownloading && (
+                <div className="update-download-box">
+                  <div className="update-download-header">
+                    <span className="update-download-label">
+                      {downloadFinished
+                        ? 'Unduhan selesai! Mempersiapkan instalasi...'
+                        : 'Mengunduh pembaruan...'}
+                    </span>
+                    <span className="update-download-percent">{downloadProgress?.percent || 0}%</span>
+                  </div>
+                  <div className="update-progress-track">
+                    <div
+                      className="update-progress-bar"
+                      style={{ width: `${downloadProgress?.percent || 0}%` }}
+                    />
+                  </div>
+                  <div className="update-download-meta">
+                    <span>
+                      {formatBytes(downloadProgress?.downloaded || 0)} / {formatBytes(downloadProgress?.total || 0)}
+                    </span>
+                    {!downloadFinished && (
+                      <span className="update-download-pulse">Memproses paket pembaruan...</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Download Error Banner */}
+              {downloadError && (
+                <div className="update-error-banner">
+                  <span className="update-error-icon">⚠️</span>
+                  <div className="update-error-text">
+                    <strong>Gagal mengunduh atau memasang pembaruan:</strong>
+                    <p>{downloadError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Release Notes Area */}
+              <div className="update-notes-card">
+                <div className="update-notes-header">
+                  <span className="update-notes-title">Catatan Rilis (v{updateInfo.version})</span>
+                  {updateInfo.date && (
+                    <span className="update-notes-version">{updateInfo.date}</span>
+                  )}
+                </div>
+                <div className="update-notes-content">
+                  {updateInfo.body ? (
+                    <div className="update-notes-body-text">{updateInfo.body}</div>
+                  ) : (
+                    <div className="update-notes-body-text" style={{ fontStyle: 'italic', color: '#64748b' }}>
+                      Tidak ada catatan rilis khusus yang dilampirkan untuk versi ini.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="update-modal-footer">
+              <button
+                type="button"
+                className="update-btn-later"
+                onClick={handleCloseUpdateModal}
+                disabled={isDownloading && !downloadError}
+              >
+                {downloadError ? 'Tutup' : 'Nanti'}
+              </button>
+              <button
+                type="button"
+                className="update-btn-primary"
+                onClick={handleStartDownloadAndInstall}
+                disabled={isDownloading}
+              >
+                {isDownloading ? (
+                  <>
+                    <span className="btn-spinner" />
+                    <span>{downloadFinished ? 'Memasang...' : 'Mengunduh...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <UpdateCircleIcon size={18} />
+                    <span>{downloadError ? 'Coba Lagi' : 'Update Sekarang'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
