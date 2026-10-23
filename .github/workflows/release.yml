@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag rilis yang akan divalidasi atau dibangun ulang (misal: v2.0.1)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,16 +19,32 @@ jobs:
     name: Build and Publish Windows Release
     runs-on: windows-latest
     steps:
+      - name: Resolve Target Tag
+        shell: powershell
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+        run: |
+          $tag = if (-not [string]::IsNullOrWhiteSpace($env:INPUT_TAG)) { $env:INPUT_TAG.Trim() } else { $env:GITHUB_REF_NAME }
+
+          if ($tag -notmatch '^v\d+\.\d+\.\d+') {
+            Write-Error "CRITICAL: Format tag '$tag' tidak valid. Tag harus mengikuti format SemVer, misal: v2.0.1"
+            exit 1
+          }
+
+          Write-Host "Target Tag: $tag"
+          "TARGET_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.inputs.tag_name || github.ref }}
 
       - name: Verify Tag Points to Main Branch (Production Guardrail)
         shell: powershell
         run: |
-          $tag = $env:GITHUB_REF_NAME
-          $sha = $env:GITHUB_SHA
+          $tag = $env:TARGET_TAG
+          $sha = (git rev-parse HEAD).Trim()
           Write-Host "Memeriksa asal commit untuk tag $tag ($sha)..."
 
           # Ambil referensi terbaru branch main dari remote
@@ -34,8 +56,7 @@ jobs:
             Write-Error "CRITICAL: Tag '$tag' menunjuk ke commit ($sha) yang BUKAN merupakan bagian dari branch 'main'! Rilis produksi dan auto-updater hanya diizinkan untuk commit yang sudah dimerge ke branch 'main'."
             exit 1
           }
-          Write-Host "✅ Verifikasi branch lolos: Commit merupakan bagian resmi dari branch 'main' (Production)."
-
+          Write-Host "[OK] Verifikasi branch lolos: Commit merupakan bagian resmi dari branch 'main' (Production)."
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -63,14 +84,10 @@ jobs:
             Write-Error "CRITICAL: Secret TAURI_SIGNING_PRIVATE_KEY belum dikonfigurasi di GitHub Repository Secrets! Signing updater tidak dapat dilakukan."
             exit 1
           }
-          Write-Host "✅ Secret TAURI_SIGNING_PRIVATE_KEY terdeteksi."
+          Write-Host "[OK] Secret TAURI_SIGNING_PRIVATE_KEY terdeteksi."
 
           # 2. Validasi format tag SemVer (vX.Y.Z)
-          $tag = $env:GITHUB_REF_NAME
-          if ($tag -notmatch '^v\d+\.\d+\.\d+') {
-            Write-Error "CRITICAL: Format tag '$tag' tidak valid. Tag harus mengikuti format SemVer, misal: v2.0.1"
-            exit 1
-          }
+          $tag = $env:TARGET_TAG
           $targetVersion = $tag -replace '^v', ''
           Write-Host "Target Release Version: $targetVersion"
 
@@ -80,7 +97,7 @@ jobs:
             Write-Error "CRITICAL: Versi di package.json ($($packageJson.version)) tidak sesuai dengan tag ($targetVersion)!"
             exit 1
           }
-          Write-Host "✅ package.json version matches: $($packageJson.version)"
+          Write-Host "[OK] package.json version matches: $($packageJson.version)"
 
           # 4. Validasi versi dan pubkey di src-tauri/tauri.conf.json
           $tauriConf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
@@ -88,13 +105,13 @@ jobs:
             Write-Error "CRITICAL: Versi di src-tauri/tauri.conf.json ($($tauriConf.version)) tidak sesuai dengan tag ($targetVersion)!"
             exit 1
           }
-          Write-Host "✅ tauri.conf.json version matches: $($tauriConf.version)"
+          Write-Host "[OK] tauri.conf.json version matches: $($tauriConf.version)"
 
           if ([string]::IsNullOrWhiteSpace($tauriConf.plugins.updater.pubkey) -or $tauriConf.plugins.updater.pubkey -match 'PLACEHOLDER') {
             Write-Error "CRITICAL: pubkey updater di tauri.conf.json kosong atau masih placeholder!"
             exit 1
           }
-          Write-Host "✅ tauri.conf.json pubkey valid."
+          Write-Host "[OK] tauri.conf.json pubkey valid."
 
           # 5. Validasi versi di src-tauri/Cargo.toml
           $cargoToml = Get-Content "src-tauri/Cargo.toml" -Raw
@@ -104,7 +121,7 @@ jobs:
               Write-Error "CRITICAL: Versi di src-tauri/Cargo.toml ($cargoVersion) tidak sesuai dengan tag ($targetVersion)!"
               exit 1
             }
-            Write-Host "✅ Cargo.toml version matches: $cargoVersion"
+            Write-Host "[OK] Cargo.toml version matches: $cargoVersion"
           } else {
             Write-Error "CRITICAL: Tidak dapat menemukan field version di src-tauri/Cargo.toml!"
             exit 1
@@ -130,27 +147,110 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          Write-Host "Memverifikasi artefak release yang berhasil dipublikasikan..."
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:TARGET_TAG
+          $targetVersion = $tag -replace '^v', ''
+          Write-Host "Memverifikasi artefak release yang dipublikasikan untuk ${tag}..."
+
+          # 1. Ambil daftar aset dari GitHub Release
           $releaseInfo = gh release view $tag --json assets | ConvertFrom-Json
-          $assetNames = $releaseInfo.assets | ForEach-Object { $_.name }
+          $assetNames = @($releaseInfo.assets | ForEach-Object { $_.name })
           Write-Host "Aset yang terunggah ke release ${tag}:"
           $assetNames | ForEach-Object { Write-Host " - $_" }
 
-          $hasExe = $assetNames | Where-Object { $_ -like "*Slimora*setup.exe" -or $_ -like "*Slimora*.exe" }
-          $hasSig = $assetNames | Where-Object { $_ -like "*.sig" }
-          $hasLatestJson = $assetNames | Where-Object { $_ -eq "latest.json" }
+          # 2. Verifikasi Installer Windows (NSIS Setup .exe)
+          $nsisInstaller = $assetNames | Where-Object { $_ -like "*${targetVersion}*setup.exe" -or $_ -like "*setup.exe" } | Select-Object -First 1
+          if (-not $nsisInstaller) {
+            Write-Error "CRITICAL: Installer Windows NSIS (*setup.exe) tidak ditemukan pada rilis!"
+            exit 1
+          }
+          Write-Host "[OK] Installer Windows ditemukan: $nsisInstaller"
 
-          if (-not $hasExe) {
-            Write-Error "CRITICAL: Installer Windows (.exe) tidak ditemukan pada rilis!"
+          # 3. Verifikasi Artefak Updater NSIS dan Signature yang Cocok
+          $updaterArchive = $assetNames | Where-Object { $_ -like "*${targetVersion}*.nsis.zip" -or $_ -like "*.nsis.zip" } | Select-Object -First 1
+          if ($updaterArchive) {
+            $targetUpdaterArtifact = $updaterArchive
+            Write-Host "[INFO] Format updater terdeteksi: Arsip kompresi ($updaterArchive)"
+          } else {
+            $targetUpdaterArtifact = $nsisInstaller
+            Write-Host "[INFO] Format updater terdeteksi: Installer native Tauri v2 ($nsisInstaller)"
+          }
+
+          $expectedSigFile = "${targetUpdaterArtifact}.sig"
+          if (-not ($assetNames | Where-Object { $_ -eq $expectedSigFile })) {
+            Write-Error "CRITICAL: File signature yang cocok untuk artefak updater ($expectedSigFile) tidak ditemukan di release!"
             exit 1
           }
-          if (-not $hasSig) {
-            Write-Error "CRITICAL: File signature (.sig) tidak ditemukan pada rilis!"
-            exit 1
-          }
-          if (-not $hasLatestJson) {
+          Write-Host "[OK] File signature yang cocok ditemukan: $expectedSigFile"
+
+          # 4. Verifikasi Manifest latest.json
+          if (-not ($assetNames | Where-Object { $_ -eq "latest.json" })) {
             Write-Error "CRITICAL: Manifest updater 'latest.json' tidak ditemukan pada rilis!"
             exit 1
           }
-          Write-Host "✅ Verifikasi rilis sukses: Seluruh artefak wajib (Installer, Signature, latest.json) tersedia!"
+          Write-Host "[OK] Manifest updater 'latest.json' ditemukan."
+
+          # 5. Unduh dan Validasi Konten Manifest latest.json
+          gh release download $tag -p "latest.json" -O "release_latest.json" --clobber
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "release_latest.json")) {
+            Write-Error "CRITICAL: Gagal mengunduh manifest 'latest.json' dari GitHub Release!"
+            exit 1
+          }
+
+          $manifest = Get-Content "release_latest.json" -Raw | ConvertFrom-Json
+          if ($manifest.version -ne $targetVersion) {
+            Write-Error "CRITICAL: Versi dalam manifest 'latest.json' ($($manifest.version)) tidak sesuai dengan target release ($targetVersion)!"
+            exit 1
+          }
+          Write-Host "[OK] Versi manifest sesuai: $($manifest.version)"
+
+          # Ambil entri platform Windows (utamakan windows-x86_64, fallback windows-x86_64-nsis)
+          $platformObj = $manifest.platforms.'windows-x86_64'
+          if (-not $platformObj) {
+            $platformObj = $manifest.platforms.'windows-x86_64-nsis'
+          }
+          if (-not $platformObj) {
+            Write-Error "CRITICAL: Platform 'windows-x86_64' atau 'windows-x86_64-nsis' tidak ditemukan dalam latest.json!"
+            exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($platformObj.url)) {
+            Write-Error "CRITICAL: URL download untuk Windows kosong dalam latest.json!"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($platformObj.signature)) {
+            Write-Error "CRITICAL: Signature untuk Windows kosong dalam latest.json!"
+            exit 1
+          }
+
+          # 6. Validasi Format Signature Minisign (Header 'dW50cnVzdGVk' -> 'untrusted')
+          if ($platformObj.signature -notmatch '^dW50cnVzdGVk') {
+            Write-Error "CRITICAL: Format signature dalam latest.json tidak valid (bukan Minisign/Tauri signature)!"
+            exit 1
+          }
+          Write-Host "[OK] Format Minisign signature pada manifest valid."
+
+          # 7. Validasi Kesesuaian URL dan Nama Artefak Manifest dengan Aset Release
+          $manifestFileName = [System.IO.Path]::GetFileName($platformObj.url)
+          Write-Host "Nama file target pada URL manifest: $manifestFileName"
+
+          if (-not ($assetNames | Where-Object { $_ -eq $manifestFileName })) {
+            Write-Error "CRITICAL: File yang ditunjuk oleh URL manifest ($manifestFileName) tidak ada di dalam aset GitHub Release!"
+            exit 1
+          }
+          Write-Host "[OK] URL manifest menunjuk ke aset release yang valid: $manifestFileName"
+
+          # Pastikan file tersebut adalah installer/updater NSIS (bukan MSI)
+          if ($manifestFileName -notlike "*setup.exe" -and $manifestFileName -notlike "*.nsis.zip") {
+            Write-Error "CRITICAL: URL manifest menunjuk ke file ($manifestFileName) yang bukan installer NSIS maupun arsip updater NSIS!"
+            exit 1
+          }
+
+          # Pastikan signature file untuk aset yang ditunjuk manifest juga tersedia di release
+          $manifestSigFile = "${manifestFileName}.sig"
+          if (-not ($assetNames | Where-Object { $_ -eq $manifestSigFile })) {
+            Write-Error "CRITICAL: File signature untuk aset manifest ($manifestSigFile) tidak ditemukan di release!"
+            exit 1
+          }
+          Write-Host "[OK] Aset manifest dan file signature pasangannya ($manifestSigFile) lengkap dan konsisten."
+
+          Write-Host "[SUCCESS] Verifikasi rilis sukses: Seluruh artefak wajib (Installer, Signature yang cocok, manifest latest.json yang valid) terverifikasi!"
