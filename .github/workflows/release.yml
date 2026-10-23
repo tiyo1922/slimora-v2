@@ -134,7 +134,7 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           $releaseInfo = gh release view $tag --json assets | ConvertFrom-Json
           $assetNames = $releaseInfo.assets | ForEach-Object { $_.name }
-          Write-Host "Aset yang terunggah ke release $tag:"
+          Write-Host "Aset yang terunggah ke release ${tag}:"
           $assetNames | ForEach-Object { Write-Host " - $_" }
 
           $hasExe = $assetNames | Where-Object { $_ -like "*Slimora*setup.exe" -or $_ -like "*Slimora*.exe" }
